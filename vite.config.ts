@@ -1,0 +1,187 @@
+import { defineConfig, type Plugin } from 'vite';
+import react from '@vitejs/plugin-react';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { ProviderManager } from './src/infrastructure/llm/ProviderManager.ts';
+import { ModelRegistry } from './src/infrastructure/llm/ModelRegistry.ts';
+
+// Resolve .env path relative to this file, not process.cwd()
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = path.resolve(__dirname, '.env');
+
+// Force-load .env with override:true so re-runs always win
+const dotenvResult = dotenv.config({ path: envPath, override: true });
+
+// ─── Startup diagnostics ─────────────────────────────────────────────────────
+console.log('[NexSite] ════════════════════════════════════════');
+console.log('[NexSite] Backend Environment Startup Diagnostics');
+console.log('[NexSite] ════════════════════════════════════════');
+console.log(`[NexSite] process.cwd() = ${process.cwd()}`);
+console.log(`[NexSite] .env path     = ${envPath}`);
+console.log(`[NexSite] dotenv result = ${dotenvResult.error ? `ERROR: ${dotenvResult.error.message}` : `OK (${Object.keys(dotenvResult.parsed || {}).length} vars)`}`);
+
+function maskKey(k: string): string {
+  if (!k || k.length < 10) return '***';
+  return k.slice(0, 6) + '...' + k.slice(-4);
+}
+
+function loadAndLogKeys(envVarName: string, providerName: string): string[] {
+  const raw = process.env[envVarName] || '';
+  const keys = raw.split(',').map(k => k.trim()).filter(Boolean);
+  if (keys.length === 0) {
+    console.log(`[NexSite] ${providerName}: ❌ No keys (${envVarName} is empty)`);
+  } else {
+    console.log(`[NexSite] ${providerName}: ✅ ${keys.length} key(s) — ${keys.map(maskKey).join(', ')}`);
+  }
+  return keys;
+}
+
+loadAndLogKeys('NVIDIA_KEYS', 'Nvidia    ');
+loadAndLogKeys('DEEPSEEK_KEYS', 'DeepSeek  ');
+loadAndLogKeys('GROQ_KEYS', 'Groq      ');
+loadAndLogKeys('GEMINI_KEYS', 'Gemini    ');
+loadAndLogKeys('KIMI_KEYS', 'Kimi      ');
+loadAndLogKeys('OPENROUTER_KEYS', 'OpenRouter');
+loadAndLogKeys('TOGETHER_KEYS', 'Together  ');
+loadAndLogKeys('HUGGINGFACE_KEYS', 'HuggingFace');
+console.log(`[NexSite] PROVIDER_SEQUENCE = ${process.env.PROVIDER_SEQUENCE || '(default)'}`);
+console.log('[NexSite] ════════════════════════════════════════');
+
+// ─── Console log ring buffer (for /debug-logs endpoint) ──────────────────────
+const MAX_LOG_LINES = 300;
+const logBuffer: string[] = [];
+
+function patchConsole() {
+  const methods = ['log', 'warn', 'error', 'info'] as const;
+  for (const method of methods) {
+    const orig = console[method].bind(console);
+    (console[method] as any) = (...args: any[]) => {
+      orig(...args);
+      const line = `[${method.toUpperCase()}] ${args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`;
+      logBuffer.push(`[${new Date().toISOString()}] ${line}`);
+      if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
+    };
+  }
+}
+patchConsole();
+
+function backendLLMPlugin(): Plugin {
+  const providerManager = new ProviderManager();
+
+  return {
+    name: 'nexsite-backend-llm-plugin',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+
+        // ── GET /health ──────────────────────────────────────────────────────
+        if (req.url === '/health' && req.method === 'GET') {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+          return;
+        }
+
+        // ── GET /providers ───────────────────────────────────────────────────
+        if (req.url === '/providers' && req.method === 'GET') {
+          // Re-read env on each request to show live state
+          dotenv.config({ path: envPath, override: true });
+          const env = process.env as Record<string, string>;
+          const sequence = (env['PROVIDER_SEQUENCE'] || 'Kimi,Gemini,Groq,OpenRouter,Together,HuggingFace').split(',').map(s => s.trim());
+          const providers = sequence.map(name => {
+            const raw = env[`${name.toUpperCase()}_KEYS`] || '';
+            const keys = raw.split(',').map(k => k.trim()).filter(Boolean);
+            return {
+              name,
+              configured: keys.length > 0,
+              keyCount: keys.length,
+              maskedKeys: keys.map(maskKey)
+            };
+          });
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ sequence, providers, envPath, cwd: process.cwd() }, null, 2));
+          return;
+        }
+
+        // ── GET /models ──────────────────────────────────────────────────────
+        if (req.url === '/models' && req.method === 'GET') {
+          const env = process.env as Record<string, string>;
+          const registry = ModelRegistry.getRegistry();
+          const models: Record<string, any> = {};
+          for (const [name, config] of Object.entries(registry)) {
+            models[name] = {
+              defaultModel: config.defaultModel,
+              activeModel: env[config.envVar] || config.defaultModel,
+              envVar: config.envVar,
+              baseUrl: config.baseUrl
+            };
+          }
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(models, null, 2));
+          return;
+        }
+
+        // ── GET /debug-logs ──────────────────────────────────────────────────
+        if (req.url === '/debug-logs' && req.method === 'GET') {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ logs: logBuffer }));
+          return;
+        }
+
+        // ── POST /generate ───────────────────────────────────────────────────
+        if ((req.url === '/generate' || req.url === '/api/generate') && req.method === 'POST') {
+          let body = '';
+          req.on('data', chunk => { body += chunk.toString(); });
+          req.on('end', async () => {
+            const requestId = Math.random().toString(36).slice(2, 8).toUpperCase();
+            console.log(`\n[/generate][${requestId}] ══ NEW REQUEST ══`);
+            console.log(`[/generate][${requestId}] Body preview: ${body.slice(0, 200)}`);
+
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const { prompt, schemaDescription } = parsed;
+
+              if (!prompt) {
+                res.statusCode = 400;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: 'Missing prompt in request body.' }));
+                return;
+              }
+
+              // Re-read .env on every request — handles edits without restart
+              dotenv.config({ path: envPath, override: true });
+
+              const output = await providerManager.generateJSON(
+                prompt,
+                schemaDescription || 'JSON Object',
+                process.env as Record<string, string>
+              );
+
+              console.log(`[/generate][${requestId}] ✅ provider=${output.telemetry.providerUsed} model=${output.telemetry.model} key#${output.telemetry.apiKeyIndex} time=${output.telemetry.generationTimeMs}ms fallback=${output.telemetry.fallbackUsed}`);
+
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(output));
+            } catch (err: any) {
+              console.error(`[/generate][${requestId}] ❌ ERROR: ${err.message || err}`);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: err.message || 'LLM Generation Error' }));
+            }
+          });
+          return;
+        }
+
+        next();
+      });
+    }
+  };
+}
+
+export default defineConfig({
+  plugins: [react(), backendLLMPlugin()],
+  server: { port: 5173 }
+});
