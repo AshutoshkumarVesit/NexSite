@@ -171,10 +171,14 @@ export class ProviderManager {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(45000),
         body: JSON.stringify({
           contents: [{ parts: [{ text: fullPrompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
+          generationConfig: { 
+            responseMimeType: 'application/json',
+            maxOutputTokens: 15000,
+            temperature: 0.2
+          }
         })
       });
 
@@ -187,7 +191,7 @@ export class ProviderManager {
       return json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     }
 
-    // OpenAI-compatible path for Kimi, Groq, OpenRouter, Together, HuggingFace
+    // OpenAI-compatible path for Kimi, Groq, OpenRouter, Together, HuggingFace, Mistral, Nvidia
     const baseUrl = ModelRegistry.getBaseUrl(provider);
     if (!baseUrl) {
       throw new Error(`ProviderManager: No baseUrl for provider ${provider}`);
@@ -209,6 +213,7 @@ export class ProviderManager {
         { role: 'system', content: 'You are a JSON generation engine. Always respond with valid JSON only. No markdown, no explanation.' },
         { role: 'user', content: fullPrompt }
       ],
+      max_tokens: 15000,
       temperature: 0.2
     };
 
@@ -220,7 +225,7 @@ export class ProviderManager {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(45000),
       body: JSON.stringify(body)
     });
 

@@ -806,6 +806,41 @@ function buildSuccessSrcdoc(
 
   <script>
     (function() {
+      // Sandboxed Storage Polyfill (guarantees window.localStorage & window.sessionStorage never throw SecurityError)
+      function createMemoryStorage() {
+        var store = {};
+        return {
+          getItem: function(k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+          setItem: function(k, v) { store[k] = String(v); },
+          removeItem: function(k) { delete store[k]; },
+          clear: function() { store = {}; },
+          key: function(i) { return Object.keys(store)[i] || null; },
+          get length() { return Object.keys(store).length; }
+        };
+      }
+      try {
+        var t = window.localStorage;
+        t && t.getItem('__test__');
+      } catch(e) {
+        var memStorage = createMemoryStorage();
+        try {
+          Object.defineProperty(window, 'localStorage', { get: function() { return memStorage; }, configurable: true });
+        } catch(e2) {
+          window.localStorage = memStorage;
+        }
+      }
+      try {
+        var ts = window.sessionStorage;
+        ts && ts.getItem('__test__');
+      } catch(e) {
+        var memSessStorage = createMemoryStorage();
+        try {
+          Object.defineProperty(window, 'sessionStorage', { get: function() { return memSessStorage; }, configurable: true });
+        } catch(e2) {
+          window.sessionStorage = memSessStorage;
+        }
+      }
+
       var __diagnostic_id__ = 'bundle-' + Date.now();
       console.log('[PREVIEW TRACE] files received: ' + ${transformedBlocks.length});
 

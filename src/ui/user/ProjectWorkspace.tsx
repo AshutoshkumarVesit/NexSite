@@ -393,7 +393,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 <iframe
                   className="nex-preview-iframe"
                   srcDoc={previewHtml}
-                  sandbox="allow-scripts"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                   title="Live Preview"
                 />
               ) : (
