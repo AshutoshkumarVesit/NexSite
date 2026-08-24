@@ -909,6 +909,83 @@ function buildSuccessSrcdoc(
         }
       }
 
+      // Safe Data Proxy & Component Guard to prevent "Cannot read properties of undefined"
+      function createSafeDataProxy(target) {
+        if (target === null || target === undefined) target = {};
+        if (typeof target !== 'object') return target;
+        if (target.__isSafeProxy) return target;
+
+        var cache = {};
+
+        return new Proxy(target, {
+          get: function(obj, prop) {
+            if (prop === '__isSafeProxy') return true;
+            if (prop === 'then' || typeof prop === 'symbol') return obj[prop];
+            
+            if (prop in obj && obj[prop] !== undefined && obj[prop] !== null) {
+              if (typeof obj[prop] === 'object') return createSafeDataProxy(obj[prop]);
+              return obj[prop];
+            }
+
+            if (cache[prop]) return cache[prop];
+
+            if (prop === 'title') return 'Overview';
+            if (prop === 'name') return 'Featured';
+            if (prop === 'subtitle' || prop === 'description') return 'Explore all features and details.';
+            if (prop === 'badge' || prop === 'tag') return 'New';
+            if (prop === 'items' || prop === 'links' || prop === 'features' || prop === 'cards' || prop === 'stats' || prop === 'testimonials' || prop === 'plans' || prop === 'faq' || prop === 'posts' || prop === 'members' || prop === 'steps' || prop === 'services' || prop === 'highlights') {
+              return [];
+            }
+            if (prop === 'cta' || prop === 'button' || prop === 'action') {
+              var defaultCta = { text: 'Get Started', href: '#' };
+              return createSafeDataProxy(defaultCta);
+            }
+            if (prop === 'image' || prop === 'imageUrl' || prop === 'src' || prop === 'avatar') {
+              return 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800';
+            }
+
+            var nested = createSafeDataProxy({});
+            cache[prop] = nested;
+            return nested;
+          }
+        });
+      }
+      window.__createSafeDataProxy__ = createSafeDataProxy;
+
+      function wrapSafeComponent(originalFn, compName) {
+        if (typeof originalFn !== 'function') return originalFn;
+        if (originalFn.__isSafeWrapped) return originalFn;
+
+        var SafeComponentWrapper = function(props) {
+          var rawProps = props || {};
+          var incomingData = rawProps.data !== undefined ? rawProps.data : (rawProps.content !== undefined ? rawProps.content : {});
+          var safeData = createSafeDataProxy(incomingData);
+          var safeProps = Object.assign({}, rawProps, {
+            data: safeData,
+            title: rawProps.title || safeData.title,
+            subtitle: rawProps.subtitle || safeData.subtitle,
+            description: rawProps.description || safeData.description,
+          });
+
+          try {
+            return originalFn(safeProps);
+          } catch(renderErr) {
+            console.warn('[SafeComponent fallback for <' + compName + '/>]:', renderErr);
+            return React.createElement('div', {
+              className: 'w-full py-12 px-6 my-4 text-center rounded-2xl bg-slate-900/60 border border-slate-800 text-slate-300 backdrop-blur-sm'
+            },
+              React.createElement('div', { className: 'inline-flex items-center justify-center w-12 h-12 rounded-xl bg-violet-600/20 text-violet-400 mb-3' }, '✨'),
+              React.createElement('h3', { className: 'text-xl font-bold text-white mb-1' }, (safeData && safeData.title) || compName),
+              React.createElement('p', { className: 'text-sm text-slate-400 max-w-md mx-auto' }, (safeData && (safeData.subtitle || safeData.description)) || 'Section dynamically rendered.')
+            );
+          }
+        };
+        SafeComponentWrapper.__isSafeWrapped = true;
+        SafeComponentWrapper.displayName = 'Safe(' + (compName || 'Component') + ')';
+        return SafeComponentWrapper;
+      }
+      window.__wrapSafeComponent__ = wrapSafeComponent;
+
       // Custom Module Resolver
       function __require__(id) {
         if (!id) return {};
@@ -962,7 +1039,11 @@ function buildSuccessSrcdoc(
             }
           }
           var cached = __cache__[modKey];
-          var primary = (cached && cached.default !== undefined) ? cached.default : cached;
+          var rawPrimary = (cached && cached.default !== undefined) ? cached.default : cached;
+          var primary = (typeof rawPrimary === 'function') ? wrapSafeComponent(rawPrimary, modKey) : rawPrimary;
+          if (cached && cached.default !== undefined) {
+            cached.default = primary;
+          }
 
           // Attach named exports onto primary if it is a function/object
           if (primary && (typeof primary === 'function' || typeof primary === 'object')) {

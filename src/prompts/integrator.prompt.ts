@@ -24,11 +24,13 @@ REQUIREMENTS
 
 1. Generate ONLY the code for {component_name}.
 2. Use Tailwind CSS for all styling.
-3. STRICT DATA CONTRACT: Every component MUST receive a single \`data\` prop containing its portion of the Data Model.
-   - Example: \`export default function Navbar({ data = { links: [] } }) { ... }\`
-   - NEVER invent props that are not in the Data Model.
-   - ALWAYS use safe defaults (e.g. \`data = {}\`) and optional chaining.
-   - DEFENSIVE PROGRAMMING IS MANDATORY: You MUST use \`(data?.links ?? []).map(...)\` or \`const links = data?.links ?? []; links.map(...)\`. NEVER write \`data?.links ?? [].map(...)\` without parentheses.
+3. STRICT DATA CONTRACT & DEFENSIVE ACCESS (ZERO-CRASH GUARANTEE):
+   - Every component MUST receive a single \`data\` prop with safe default parameter:
+     \`export default function {component_name}({ data = {} }: { data?: any }) { ... }\`
+   - At the top of every component, ALWAYS destructure with safe fallback defaults:
+     \`const { title = 'Overview', subtitle = '', description = '', items = [], stats = [], features = [], cards = [], cta = { text: 'Get Started', href: '#' } } = (data || {});\`
+   - NEVER directly write \`const { title } = data;\` or access \`data.title\` without \`(data || {})\` or optional chaining \`data?.title\`.
+   - DEFENSIVE MAPPING IS MANDATORY: You MUST write \`(data?.items ?? []).map(...)\` or \`const list = data?.items || []; list.map(...)\`. NEVER write \`data?.items.map(...)\` directly.
 4. If this component is "App", it MUST:
    - Declare the global pageData: \`const pageData = {data_model_json};\`
    - Render all child components: \`<Navbar data={pageData.navbar} />\`
