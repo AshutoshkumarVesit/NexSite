@@ -76,13 +76,18 @@ app.post('/api/generate', async (req, res) => {
 const distPath = path.resolve(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
+  // Express 5 compatible SPA fallback
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api') && !req.path.startsWith('/auth') && req.path !== '/health') {
+      return res.sendFile(path.join(distPath, 'index.html'));
+    }
+    next();
   });
 }
 
-app.listen(port, () => {
-  console.log(`[NexSite LLM Backend] Express server running on port ${port}`);
+const host = '0.0.0.0';
+app.listen(port, host, () => {
+  console.log(`[NexSite LLM Backend] Express server running on http://${host}:${port}`);
   console.log(`[NexSite LLM Backend] Provider sequence: ${process.env.PROVIDER_SEQUENCE || 'Groq,Mistral,OpenRouter,Nvidia'}`);
 });
 
