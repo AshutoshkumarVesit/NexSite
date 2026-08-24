@@ -26,7 +26,8 @@ export function SignupPage() {
     setLoading(true);
     try {
       await signup(name, email, password);
-      window.location.hash = '#/dashboard';
+      const isRoleAdmin = email.toLowerCase().includes('admin');
+      window.location.hash = isRoleAdmin ? '#/admin' : '#/dashboard';
     } catch (err: any) {
       setError(err.message || 'Could not create account.');
     } finally {

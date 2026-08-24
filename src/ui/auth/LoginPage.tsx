@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from './AuthContext';
 import { Sparkles } from 'lucide-react';
 import { BackgroundVideo } from '../common/BackgroundVideo';
+import { AuthService } from '../../services/AuthService';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -16,7 +17,12 @@ export function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      window.location.hash = '#/dashboard';
+      const user = await AuthService.verify();
+      if (user?.role === 'admin') {
+        window.location.hash = '#/admin';
+      } else {
+        window.location.hash = '#/dashboard';
+      }
     } catch (err: any) {
       setError(err.message || 'Invalid email or password.');
     } finally {
@@ -67,9 +73,9 @@ export function LoginPage() {
 
           <form onSubmit={handleSubmit} className="nex-login-form">
             <label className="nex-label">
-              Email
+              Email or Username
               <input
-                type="email"
+                type="text"
                 className="nex-input"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
@@ -101,7 +107,7 @@ export function LoginPage() {
               className="nex-btn-demo"
               onClick={() => {
                 setEmail('admin@nexsite.ai');
-                setPassword('Admin@123');
+                setPassword('admin123');
                 setError('');
               }}
             >
@@ -112,7 +118,7 @@ export function LoginPage() {
               className="nex-btn-demo"
               onClick={() => {
                 setEmail('user@nexsite.ai');
-                setPassword('User@123');
+                setPassword('user123');
                 setError('');
               }}
             >
