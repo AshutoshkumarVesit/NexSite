@@ -853,6 +853,52 @@ function buildSuccessSrcdoc(
         window.Fragment = React.Fragment;
         window.Suspense = React.Suspense;
         window.StrictMode = React.StrictMode;
+
+        // Auto-sanitize React children to prevent "Objects are not valid as a React child" crashes
+        var originalCreateElement = React.createElement;
+        function sanitizeReactChild(child) {
+          if (child === null || child === undefined || typeof child === 'boolean') return child;
+          if (typeof child === 'string' || typeof child === 'number') return child;
+          if (Array.isArray(child)) return child.map(sanitizeReactChild);
+          // Keep valid React elements (they have $$typeof or _isReactElement)
+          if (child && (child.$$typeof || child._isReactElement)) return child;
+          // Plain objects or Proxy objects rendered directly in JSX
+          if (typeof child === 'object') {
+            if (typeof child.text === 'string') return child.text;
+            if (typeof child.label === 'string') return child.label;
+            if (typeof child.title === 'string') return child.title;
+            if (typeof child.name === 'string') return child.name;
+            if (typeof child.value === 'string' || typeof child.value === 'number') return child.value;
+            // Empty or proxy object — return null so React does not crash with "Objects are not valid as a React child"
+            return null;
+          }
+          return String(child);
+        }
+
+        React.createElement = function(type, props) {
+          var args = [];
+          for (var i = 0; i < arguments.length; i++) {
+            args.push(arguments[i]);
+          }
+
+          if (args.length > 2) {
+            for (var c = 2; c < args.length; c++) {
+              args[c] = sanitizeReactChild(args[c]);
+            }
+          }
+
+          if (props && props.children !== undefined) {
+            if (Array.isArray(props.children)) {
+              props = Object.assign({}, props, { children: props.children.map(sanitizeReactChild) });
+              args[1] = props;
+            } else if (typeof props.children === 'object' && !props.children.$$typeof) {
+              props = Object.assign({}, props, { children: sanitizeReactChild(props.children) });
+              args[1] = props;
+            }
+          }
+
+          return originalCreateElement.apply(React, args);
+        };
       }
       if (typeof ReactDOM !== 'undefined') {
         window.ReactDOM = ReactDOM;
