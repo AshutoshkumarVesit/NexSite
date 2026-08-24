@@ -19,21 +19,50 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Simple in-memory users for basic auth
+// Simple fallback users for server auth
 const users = [
-  { username: 'admin', password: 'admin123', role: 'admin' },
-  { username: 'user', password: 'user123', role: 'user' },
+  { email: 'admin@nexsite.ai', username: 'admin', password: 'admin123', role: 'admin', name: 'Admin' },
+  { email: 'user@nexsite.ai', username: 'user', password: 'user123', role: 'user', name: 'Demo User' },
 ];
 
 // Auth login endpoint
 app.post('/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  const found = users.find(u => u.username === username && u.password === password);
+  const { email, username, password } = req.body;
+  const identifier = (email || username || '').trim().toLowerCase();
+  const found = users.find(u => 
+    (u.email.toLowerCase() === identifier || u.username.toLowerCase() === identifier) && 
+    u.password === password
+  );
   if (!found) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  const token = Buffer.from(`${found.username}:${found.role}`).toString('base64');
-  res.json({ token, role: found.role });
+  const token = Buffer.from(`${found.email}:${found.role}`).toString('base64');
+  res.json({ 
+    token, 
+    user: { id: found.username, name: found.name, email: found.email, role: found.role } 
+  });
+});
+
+app.post('/auth/signup', (req, res) => {
+  const { name, email } = req.body;
+  const role = (email || '').toLowerCase().includes('admin') ? 'admin' : 'user';
+  const token = Buffer.from(`${email}:${role}`).toString('base64');
+  res.json({
+    token,
+    user: { id: 'user_' + Date.now(), name: name || 'User', email, role }
+  });
+});
+
+app.get('/auth/verify', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'No token' });
+  try {
+    const raw = Buffer.from(authHeader.replace('Bearer ', ''), 'base64').toString('utf8');
+    const [email, role] = raw.split(':');
+    res.json({ user: { id: 'verified_user', name: email?.split('@')[0] || 'User', email, role: role || 'user' } });
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
+  }
 });
 
 app.post('/generate', async (req, res) => {
