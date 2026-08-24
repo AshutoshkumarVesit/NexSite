@@ -891,20 +891,30 @@ function buildSuccessSrcdoc(
 
         // Auto-sanitize React children to prevent "Objects are not valid as a React child" crashes
         var originalCreateElement = React.createElement;
+        var REACT_ELEMENT_TYPE = typeof Symbol === 'function' && Symbol.for ? Symbol.for('react.element') : 0xeac7;
+
         function sanitizeReactChild(child) {
-          if (child === null || child === undefined || typeof child === 'boolean') return child;
+          if (child === null || child === undefined || typeof child === 'boolean') return null;
           if (typeof child === 'string' || typeof child === 'number') return child;
           if (Array.isArray(child)) return child.map(sanitizeReactChild);
-          // Keep valid React elements (they have $$typeof or _isReactElement)
-          if (child && (child.$$typeof || child._isReactElement)) return child;
-          // Plain objects or Proxy objects rendered directly in JSX
-          if (typeof child === 'object') {
+          
+          // Strict check for genuine React elements (checks real $$typeof property, not proxy getters)
+          if (child && typeof child === 'object') {
+            if (child.$$typeof === REACT_ELEMENT_TYPE || child.$$typeof === 0xeac7) {
+              return child;
+            }
+
+            // Extract string values from plain objects, CTA definitions, or SafeDataProxy
             if (typeof child.text === 'string') return child.text;
             if (typeof child.label === 'string') return child.label;
             if (typeof child.title === 'string') return child.title;
             if (typeof child.name === 'string') return child.name;
-            if (typeof child.value === 'string' || typeof child.value === 'number') return child.value;
-            // Empty or proxy object — return null so React does not crash with "Objects are not valid as a React child"
+            if (typeof child.quote === 'string') return child.quote;
+            if (typeof child.author === 'string') return child.author;
+            if (typeof child.content === 'string') return child.content;
+            if (typeof child.value === 'string' || typeof child.value === 'number') return String(child.value);
+
+            // Any remaining object or empty proxy rendered as a child -> return null to prevent throwOnInvalidObjectType
             return null;
           }
           return String(child);
@@ -926,9 +936,11 @@ function buildSuccessSrcdoc(
             if (Array.isArray(props.children)) {
               props = Object.assign({}, props, { children: props.children.map(sanitizeReactChild) });
               args[1] = props;
-            } else if (typeof props.children === 'object' && !props.children.$$typeof) {
-              props = Object.assign({}, props, { children: sanitizeReactChild(props.children) });
-              args[1] = props;
+            } else if (typeof props.children === 'object' && props.children !== null) {
+              if (props.children.$$typeof !== REACT_ELEMENT_TYPE && props.children.$$typeof !== 0xeac7) {
+                props = Object.assign({}, props, { children: sanitizeReactChild(props.children) });
+                args[1] = props;
+              }
             }
           }
 
@@ -1001,8 +1013,14 @@ function buildSuccessSrcdoc(
         return new Proxy(target, {
           get: function(obj, prop) {
             if (prop === '__isSafeProxy') return true;
-            if (prop === 'then' || typeof prop === 'symbol') return obj[prop];
-            
+            if (typeof prop === 'symbol') return obj[prop];
+            if (typeof prop !== 'string') return obj[prop];
+
+            // React internals and private properties MUST NOT return truthy proxy fallbacks
+            if (prop.startsWith('_') || prop.startsWith('$') || prop === 'key' || prop === 'ref' || prop === 'type' || prop === 'props' || prop === 'then' || prop === 'toJSON') {
+              return obj[prop];
+            }
+
             if (prop in obj && obj[prop] !== undefined && obj[prop] !== null) {
               if (typeof obj[prop] === 'object') return createSafeDataProxy(obj[prop]);
               return obj[prop];
@@ -1013,16 +1031,35 @@ function buildSuccessSrcdoc(
             if (prop === 'title') return 'Overview';
             if (prop === 'name') return 'Featured';
             if (prop === 'subtitle' || prop === 'description') return 'Explore all features and details.';
-            if (prop === 'badge' || prop === 'tag') return 'New';
-            if (prop === 'items' || prop === 'links' || prop === 'features' || prop === 'cards' || prop === 'stats' || prop === 'testimonials' || prop === 'plans' || prop === 'faq' || prop === 'posts' || prop === 'members' || prop === 'steps' || prop === 'services' || prop === 'highlights') {
-              return [];
+            if (prop === 'quote' || prop === 'content' || prop === 'feedback' || prop === 'comment' || prop === 'review') return 'An outstanding experience with exceptional quality and results.';
+            if (prop === 'author') return 'Alex Morgan';
+            if (prop === 'role' || prop === 'designation') return 'Product Lead';
+            if (prop === 'company') return 'NexStudio';
+            if (prop === 'badge' || prop === 'tag' || prop === 'status' || prop === 'category') return 'Featured';
+            if (prop === 'rating' || prop === 'stars') return 5;
+            if (prop === 'price') return '$49';
+            if (prop === 'period') return '/month';
+            if (prop === 'question') return 'How does it work?';
+            if (prop === 'answer') return 'Everything is automated, interactive, and fully responsive.';
+            if (prop === 'date') return 'August 2026';
+            if (prop === 'text' || prop === 'label' || prop === 'caption' || prop === 'heading') return 'Explore';
+            if (prop === 'href' || prop === 'url' || prop === 'link') return '#';
+            if (prop === 'image' || prop === 'imageUrl' || prop === 'src' || prop === 'avatar' || prop === 'photo') {
+              return 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800';
             }
             if (prop === 'cta' || prop === 'button' || prop === 'action') {
-              var defaultCta = { text: 'Get Started', href: '#' };
-              return createSafeDataProxy(defaultCta);
+              return createSafeDataProxy({ text: 'Get Started', href: '#', label: 'Get Started', title: 'Get Started' });
             }
-            if (prop === 'image' || prop === 'imageUrl' || prop === 'src' || prop === 'avatar') {
-              return 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800';
+            if (prop === 'items' || prop === 'links' || prop === 'features' || prop === 'cards' || prop === 'stats' || prop === 'testimonials' || prop === 'plans' || prop === 'faq' || prop === 'posts' || prop === 'members' || prop === 'steps' || prop === 'services' || prop === 'highlights' || prop === 'quotes' || prop === 'reviews' || prop === 'options' || prop === 'tags') {
+              return [];
+            }
+            if (prop === 'designSystem') {
+              return createSafeDataProxy({
+                primaryColor: '#7c3aed',
+                secondaryColor: '#6366f1',
+                accentColor: '#ec4899',
+                fontFamily: 'Inter',
+              });
             }
 
             var nested = createSafeDataProxy({});
