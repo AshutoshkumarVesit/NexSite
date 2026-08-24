@@ -3,12 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
-import { ProviderManager } from '../infrastructure/llm/ProviderManager';
+import { ProviderManager } from '../infrastructure/llm/ProviderManager.ts';
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3001;
+const port: number = parseInt(process.env.PORT || '3001', 10);
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));

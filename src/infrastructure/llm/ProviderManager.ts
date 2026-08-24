@@ -1,5 +1,5 @@
-import { ModelRegistry, type ProviderType } from './ModelRegistry';
-import { MockLLMProvider } from './MockLLMProvider';
+import { ModelRegistry, type ProviderType } from './ModelRegistry.ts';
+import { MockLLMProvider } from './MockLLMProvider.ts';
 
 export interface GenerationTelemetry {
   providerUsed: ProviderType;
