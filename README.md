@@ -100,17 +100,28 @@ cp .env.example .env
 Edit `.env` with your Supabase credentials and LLM API keys:
 
 ```env
-# Supabase
+# 1. Primary AI: Groq
+GROQ_KEYS=gsk_key1,gsk_key2
+GROQ_MODEL=openai/gpt-oss-120b
+
+# 2. Secondary AI: Mistral
+MISTRAL_KEYS=your_mistral_api_key
+MISTRAL_MODEL=mistral-small-latest
+
+# 3. Tertiary AI: Nvidia
+NVIDIA_KEYS=nvapi-your_nvidia_api_key
+NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+
+# 4. Quaternary AI: OpenRouter
+OPENROUTER_KEYS=sk-or-v1-your_openrouter_api_key
+OPENROUTER_MODEL=deepseek/deepseek-chat
+
+PROVIDER_SEQUENCE=Groq,Mistral,OpenRouter,Nvidia
+PORT=3001
+
+# Supabase Database Configuration
 VITE_SUPABASE_URL=https://your-project-id.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-publishable-key-here
-
-# LLM Provider Keys (add at least one)
-GROQ_KEYS=gsk_your_groq_key
-GEMINI_KEYS=AIzaSy_your_gemini_key
-OPENROUTER_KEYS=sk-or-your_openrouter_key
-
-PROVIDER_SEQUENCE=Groq,Gemini,OpenRouter
-PORT=3001
 ```
 
 ### 4. Supabase Database & Row Level Security Setup
