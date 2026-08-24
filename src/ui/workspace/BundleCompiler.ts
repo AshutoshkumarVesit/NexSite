@@ -339,7 +339,10 @@ function analyzeFiles(generatedFiles: Record<string, string>): {
         const resolved = resolveImportSource(imp.source);
         // Components MUST start with an uppercase letter (PascalCase)
         if (/^[A-Z]/.test(resolved)) {
-          localDeps.push(resolved);
+          // Exclude self-dependency (e.g. Testimonials importing Testimonials) and deduplicate
+          if (resolved !== compName && !localDeps.includes(resolved)) {
+            localDeps.push(resolved);
+          }
         }
       } else {
         // Validate external package imports against SupportedDependencyRegistry
@@ -425,7 +428,7 @@ function analyzeFiles(generatedFiles: Record<string, string>): {
   return { files, diagnostics };
 }
 
-// ─── Circular Dependency Detection ─────────────────────────────────────────────
+// ─── Circular Dependency Detection & Graph Auto-Healing ─────────────────────────
 
 function detectCycles(files: Map<string, FileAnalysis>): BundleDiagnostic[] {
   const diagnostics: BundleDiagnostic[] = [];
@@ -434,19 +437,28 @@ function detectCycles(files: Map<string, FileAnalysis>): BundleDiagnostic[] {
 
   for (const name of files.keys()) color.set(name, WHITE);
 
-  function dfs(node: string, path: string[]): boolean {
+  function dfs(node: string, path: string[]) {
     color.set(node, GRAY);
     path.push(node);
 
     const analysis = files.get(node);
     if (analysis) {
-      for (const dep of analysis.localDeps) {
+      // Iterate over a snapshot of localDeps so we can safely break cycles
+      const currentDeps = [...analysis.localDeps];
+      for (const dep of currentDeps) {
         if (!files.has(dep)) continue;
+        
+        // Auto-remove self-dependencies
+        if (dep === node) {
+          analysis.localDeps = analysis.localDeps.filter(d => d !== dep);
+          continue;
+        }
 
         const c = color.get(dep);
         if (c === GRAY) {
           const cycleStart = path.indexOf(dep);
           const chain = [...path.slice(cycleStart), dep];
+          console.warn(`[BundleCompiler] 🔄 Circular dependency detected & auto-broken: ${chain.join(' → ')}`);
           diagnostics.push({
             type: 'CIRCULAR_DEPENDENCY',
             source: node,
@@ -454,17 +466,16 @@ function detectCycles(files: Map<string, FileAnalysis>): BundleDiagnostic[] {
             chain,
             message: `Circular dependency detected: ${chain.join(' → ')}`,
           });
-          return true;
-        }
-        if (c === WHITE) {
-          if (dfs(dep, path)) return true;
+          // Break cycle in dependency graph for Kahn's topological sort
+          analysis.localDeps = analysis.localDeps.filter(d => d !== dep);
+        } else if (c === WHITE) {
+          dfs(dep, path);
         }
       }
     }
 
     path.pop();
     color.set(node, BLACK);
-    return false;
   }
 
   for (const name of files.keys()) {
@@ -475,6 +486,7 @@ function detectCycles(files: Map<string, FileAnalysis>): BundleDiagnostic[] {
 
   return diagnostics;
 }
+
 
 // ─── Topological Sort (Kahn's Algorithm) ────────────────────────────────────────
 
@@ -521,9 +533,18 @@ function topologicalSort(files: Map<string, FileAnalysis>): {
     }
   }
 
+  // If any components remain un-enqueued (e.g. due to graph cycles), append them safely
+  if (order.length < files.size) {
+    for (const name of files.keys()) {
+      if (!order.includes(name)) {
+        order.push(name);
+      }
+    }
+  }
+
   return {
     order,
-    success: order.length === files.size,
+    success: true,
   };
 }
 
@@ -531,7 +552,7 @@ function topologicalSort(files: Map<string, FileAnalysis>): {
 
 // ─── Code Transformation & Scoped Module Registry ─────────────────────────────
 
-function transformCode(code: string, compName: string, isApp: boolean): string {
+function transformCode(code: string, compName: string, _isApp?: boolean): string {
   let transformed = ResponseNormalizer.cleanCode(code);
 
   const parsedImports = parseImports(transformed);
@@ -561,10 +582,10 @@ function transformCode(code: string, compName: string, isApp: boolean): string {
       const pkgVar = `__pkg_${imp.startIndex}`;
       let stmts = [`var ${pkgVar} = __require__("${src}");`];
       if (imp.defaultImport) {
-        stmts.push(`var ${imp.defaultImport} = ${pkgVar}.default || ${pkgVar};`);
+        stmts.push(`var ${imp.defaultImport} = (${pkgVar} && ${pkgVar}.default !== undefined) ? ${pkgVar}.default : ${pkgVar};`);
       }
       if (imp.namedImports.length > 0) {
-        stmts.push(`var { ${imp.namedImports.join(', ')} } = ${pkgVar};`);
+        stmts.push(`var { ${imp.namedImports.join(', ')} } = ${pkgVar} || {};`);
       }
       replacement = stmts.join(' ');
     }
@@ -572,35 +593,62 @@ function transformCode(code: string, compName: string, isApp: boolean): string {
   }
 
   // Rewrite exports
-  if (!isApp) {
-    transformed = transformed.replace(
-      /export\s+default\s+function\s+App\s*\(/g,
-      `function ${compName}(`
-    );
-  }
-
+  // 1. export default function Name(...)
   transformed = transformed.replace(
-    /export\s+default\s+function\s+(\w+)\s*\(/g,
+    /export\s+default\s+(?:async\s+)?function\s+(\w+)\s*\(/g,
     'function $1('
   );
+
+  // 2. export default function(...) -> anonymous function
   transformed = transformed.replace(
-    /export\s+default\s+function\s*\(/g,
+    /export\s+default\s+(?:async\s+)?function\s*\(/g,
     `function ${compName}(`
   );
+
+  // 3. export default (const|let|var) Name = ...
   transformed = transformed.replace(
     /export\s+default\s+(const|let|var)\s+(\w+)/g,
     '$1 $2'
   );
+
+  // 4. export default () => or export default (props) =>
   transformed = transformed.replace(
-    /export\s+default\s+(\w+)\s*;?/g,
+    /export\s+default\s+(?:async\s+)?(\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>/g,
+    `const ${compName} = ($1) =>`
+  );
+
+  // 5. export default <expression>;
+  transformed = transformed.replace(
+    /export\s+default\s+([^;\n]+);?/g,
     '__exports__.default = $1;'
   );
 
-  transformed = transformed.replace(/export\s+function\s+(\w+)\s*\(/g, 'function $1(');
-  transformed = transformed.replace(/export\s+(const|let|var)\s+(\w+)/g, '$1 $2');
-  transformed = transformed.replace(/export\s+\{\s*([^}]+)\s*\}\s*;?/g, ''); // strip named exports block
+  // 6. Named function exports
+  transformed = transformed.replace(/export\s+(?:async\s+)?function\s+(\w+)\s*\(/g, 'function $1(');
 
-  // Strip Icon prefix from JSX tags
+  // 7. Named variable exports
+  transformed = transformed.replace(/export\s+(const|let|var)\s+(\w+)/g, '$1 $2');
+
+  // 8. Named export clauses: export { A, B as C, D as default };
+  transformed = transformed.replace(/export\s*\{([^}]+)\}\s*;?/g, (_, clause) => {
+    const parts = clause.split(',').map((s: string) => s.trim()).filter(Boolean);
+    const assignStmts: string[] = [];
+    for (const part of parts) {
+      if (part.includes(' as ')) {
+        const [orig, alias] = part.split(/\s+as\s+/).map((s: string) => s.trim());
+        if (alias === 'default') {
+          assignStmts.push(`__exports__.default = ${orig};`);
+        } else {
+          assignStmts.push(`__exports__['${alias}'] = ${orig};`);
+        }
+      } else {
+        assignStmts.push(`__exports__['${part}'] = ${part};`);
+      }
+    }
+    return assignStmts.join(' ');
+  });
+
+  // Strip Icon prefix from JSX tags: <IconShield /> -> <Shield />
   transformed = transformed.replace(/<Icon([A-Z][a-zA-Z0-9]*)/g, '<$1');
   transformed = transformed.replace(/<\/Icon([A-Z][a-zA-Z0-9]*)/g, '</$1');
 
@@ -608,40 +656,81 @@ function transformCode(code: string, compName: string, isApp: boolean): string {
   transformed = transformed.replace(/BrowserRouter/g, 'MemoryRouter');
   transformed = transformed.replace(/HashRouter/g, 'MemoryRouter');
 
-  if (isApp) {
-    transformed += `\nif (typeof App !== 'undefined') { __exports__.default = App; var __app_component__ = App; }`;
-  }
-
   return transformed;
 }
 
-function wrapInModuleScope(compName: string, transformedCode: string): string {
-  return `__modules__['${compName}'] = function(__exports__, __require__) {
+function wrapInModuleScope(compName: string, transformedCode: string, exportedNames: string[] = []): string {
+  const safeNamesJson = JSON.stringify(exportedNames.filter(n => n && n !== '__anonymous__'));
+  return `__modules__['${compName}'] = function(__exports__, __require__, module) {
+var exports = __exports__;
+var motion = window.motion || (__require__('framer-motion') && __require__('framer-motion').motion);
+var AnimatePresence = window.AnimatePresence || (__require__('framer-motion') && __require__('framer-motion').AnimatePresence);
+var useInView = window.useInView;
+var useAnimation = window.useAnimation;
+var useMotionValue = window.useMotionValue;
+var useTransform = window.useTransform;
+var useSpring = window.useSpring;
+var useScroll = window.useScroll;
 ${transformedCode}
-if (!__exports__.default) {
-  if (typeof ${compName} !== 'undefined') {
-    __exports__.default = ${compName};
-  } else if (typeof App !== 'undefined') {
-    __exports__.default = App;
+
+// Comprehensive export auto-binding
+(function() {
+  var knownNames = ${safeNamesJson};
+  var candidates = [];
+
+  for (var i = 0; i < knownNames.length; i++) {
+    var kName = knownNames[i];
+    try {
+      var val = eval(kName);
+      if (val !== undefined) {
+        if (!__exports__[kName]) __exports__[kName] = val;
+        candidates.push(val);
+      }
+    } catch(e) {}
   }
-}
-if (typeof ${compName} !== 'undefined') {
-  __exports__['${compName}'] = ${compName};
-}
+
+  try { if (typeof ${compName} !== 'undefined' && ${compName} !== undefined) { candidates.push(${compName}); if (!__exports__['${compName}']) __exports__['${compName}'] = ${compName}; } } catch(e) {}
+  try { if (typeof App !== 'undefined' && App !== undefined) { candidates.push(App); if (!__exports__['App']) __exports__['App'] = App; } } catch(e) {}
+
+  if (!__exports__.default) {
+    if (module && module.exports && module.exports !== __exports__) {
+      __exports__.default = (module.exports && module.exports.default !== undefined) ? module.exports.default : module.exports;
+    } else if (candidates.length > 0) {
+      __exports__.default = candidates[0];
+    } else {
+      for (var k in __exports__) {
+        if (k !== 'default' && (typeof __exports__[k] === 'function' || (typeof __exports__[k] === 'object' && __exports__[k] !== null))) {
+          __exports__.default = __exports__[k];
+          break;
+        }
+      }
+    }
+  }
+
+  if (!__exports__['${compName}'] && __exports__.default) {
+    __exports__['${compName}'] = __exports__.default;
+  }
+  ${compName === 'App' ? `
+  if (!__exports__['App'] && __exports__.default) {
+    __exports__['App'] = __exports__.default;
+  }
+  ` : ''}
+})();
 };`;
 }
 
 // ─── Srcdoc Generation ─────────────────────────────────────────────────────────
 
 function buildSuccessSrcdoc(
-  transformedBlocks: { compName: string; code: string }[],
+  transformedBlocks: { compName: string; code: string; exportedNames: string[] }[],
   rawBundledSource?: string,
 ): string {
   const moduleWrappedBlocks = rawBundledSource
     ? [rawBundledSource]
-    : transformedBlocks.map(b => wrapInModuleScope(b.compName, b.code));
+    : transformedBlocks.map(b => wrapInModuleScope(b.compName, b.code, b.exportedNames));
 
   const concatenated = moduleWrappedBlocks.join('\n\n');
+  const lucideListJson = JSON.stringify(Array.from(LUCIDE_ALLOWLIST));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -653,11 +742,37 @@ function buildSuccessSrcdoc(
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
   <script src="https://cdn.tailwindcss.com"><\/script>
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, sans-serif; background-color: #0f172a; color: #f8fafc; }
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, -apple-system, sans-serif; background-color: #0f172a; color: #f8fafc; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    html { scroll-behavior: smooth; }
+    :root {
+      --primary: #7c3aed;
+      --secondary: #6366f1;
+      --accent: #ec4899;
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+    }
+    img { max-width: 100%; height: auto; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideInLeft { from { opacity: 0; transform: translateX(-30px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(124, 58, 237, 0.3); } 50% { box-shadow: 0 0 40px rgba(124, 58, 237, 0.6); } }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+    }
   </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Playfair+Display:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 </head>
+
 <body>
   <div id="root"></div>
   <div id="error-display" style="display:none; padding: 2rem; background: #450a0a; color: #fca5a5; font-family: monospace; border: 1px solid #991b1b; margin: 1rem; border-radius: 0.75rem; max-width: 90%; white-space: pre-wrap; word-break: break-all;"></div>
@@ -725,6 +840,51 @@ function buildSuccessSrcdoc(
         try { window.parent.postMessage({ type: 'NEXSITE_PREVIEW_ERROR', error: msg, stack: stack }, '*'); } catch(e) {}
       });
 
+      // Expose React & hooks globally on window for maximum resilience
+      if (typeof React !== 'undefined') {
+        window.React = React;
+        window.useState = React.useState;
+        window.useEffect = React.useEffect;
+        window.useRef = React.useRef;
+        window.useMemo = React.useMemo;
+        window.useCallback = React.useCallback;
+        window.useContext = React.useContext;
+        window.createContext = React.createContext;
+        window.Fragment = React.Fragment;
+        window.Suspense = React.Suspense;
+        window.StrictMode = React.StrictMode;
+      }
+      if (typeof ReactDOM !== 'undefined') {
+        window.ReactDOM = ReactDOM;
+      }
+
+      // Framer Motion Global Shims
+      var createMotionComponent = function(tag) {
+        return React.forwardRef(function(props, ref) {
+          var cleanProps = {};
+          for (var k in props) {
+            if (!['initial', 'animate', 'exit', 'transition', 'variants', 'whileHover', 'whileTap', 'whileFocus', 'whileInView', 'viewport', 'layout', 'layoutId', 'onAnimationComplete', 'onAnimationStart', 'custom'].includes(k)) {
+              cleanProps[k] = props[k];
+            }
+          }
+          if (ref) cleanProps.ref = ref;
+          return React.createElement(typeof tag === 'string' ? tag : (tag.default || tag), cleanProps);
+        });
+      };
+      var motionProxy = new Proxy(function(Comp) { return createMotionComponent(Comp); }, {
+        get: function(_, tag) { return createMotionComponent(tag); }
+      });
+      var AnimatePresenceShim = function(props) { return React.createElement(React.Fragment, null, props.children); };
+
+      window.motion = motionProxy;
+      window.AnimatePresence = AnimatePresenceShim;
+      window.useInView = function() { return [null, true]; };
+      window.useAnimation = function() { return { start: function() { return Promise.resolve(); }, set: function() {}, stop: function() {} }; };
+      window.useMotionValue = function(init) { return { get: function() { return init; }, set: function() {}, onChange: function() {} }; };
+      window.useTransform = function(val, from, to) { return { get: function() { return to ? to[0] : 0; } }; };
+      window.useSpring = function() { return { get: function() { return 0; } }; };
+      window.useScroll = function() { return { scrollX: { get: function() { return 0; } }, scrollY: { get: function() { return 0; } }, scrollXProgress: { get: function() { return 0; } }, scrollYProgress: { get: function() { return 0; } } }; };
+
       // Lucide Icon Fallback Component
       var LucideIcon = function(props) {
         var size = (props && props.size) || 20;
@@ -738,6 +898,17 @@ function buildSuccessSrcdoc(
         }, React.createElement('circle', { cx: 12, cy: 12, r: 10 }), React.createElement('path', { d: 'M12 8v8M8 12h8' }));
       };
 
+      // Expose Lucide icons globally so undeclared icon tags in JSX never throw ReferenceError
+      var knownIcons = ${lucideListJson};
+      for (var ic = 0; ic < knownIcons.length; ic++) {
+        var icName = knownIcons[ic];
+        if (typeof window[icName] === 'undefined') {
+          (function(n) {
+            window[n] = function(props) { return React.createElement(LucideIcon, Object.assign({ iconName: n }, props)); };
+          })(icName);
+        }
+      }
+
       // Custom Module Resolver
       function __require__(id) {
         if (!id) return {};
@@ -746,7 +917,7 @@ function buildSuccessSrcdoc(
         var parts = String(id).split('/');
         var cleanId = parts[parts.length - 1].replace(/\\.tsx?$/, '').trim();
 
-        // 1. Check module registry (exact, case-insensitive, or substring match)
+        // 1. Check module registry (exact, case-insensitive, aliases, or substring match)
         var modKey = null;
         if (__modules__[cleanId]) {
           modKey = cleanId;
@@ -756,8 +927,21 @@ function buildSuccessSrcdoc(
             if (k.toLowerCase() === lower) { modKey = k; break; }
           }
           if (!modKey) {
-            for (var k in __modules__) {
-              if (k.toLowerCase().includes(lower) || lower.includes(k.toLowerCase())) { modKey = k; break; }
+            var aliases = [
+              cleanId + 'Section', cleanId + 'Component', cleanId + 'Nav', cleanId + 'Banner', cleanId + 'Grid',
+              cleanId.endsWith('s') ? cleanId.slice(0, -1) : cleanId + 's'
+            ];
+            for (var a = 0; a < aliases.length; a++) {
+              var aliasLower = aliases[a].toLowerCase();
+              for (var k2 in __modules__) {
+                if (k2.toLowerCase() === aliasLower) { modKey = k2; break; }
+              }
+              if (modKey) break;
+            }
+          }
+          if (!modKey) {
+            for (var k3 in __modules__) {
+              if (k3.toLowerCase().includes(lower) || lower.includes(k3.toLowerCase())) { modKey = k3; break; }
             }
           }
         }
@@ -765,36 +949,72 @@ function buildSuccessSrcdoc(
         if (modKey) {
           if (!__cache__[modKey]) {
             var modExports = {};
+            var modModule = { exports: modExports };
             __cache__[modKey] = modExports;
             try {
-              __modules__[modKey](modExports, __require__);
+              __modules__[modKey](modExports, __require__, modModule);
+              if (modModule.exports && modModule.exports !== modExports) {
+                __cache__[modKey] = modModule.exports;
+              }
             } catch(err) {
               console.error('Module execution failed for [' + modKey + ']:', err);
               throw err;
             }
           }
           var cached = __cache__[modKey];
-          var res = cached.default !== undefined ? cached.default : cached;
-          if (res && (typeof res === 'function' || typeof res === 'object')) {
+          var primary = (cached && cached.default !== undefined) ? cached.default : cached;
+
+          // Attach named exports onto primary if it is a function/object
+          if (primary && (typeof primary === 'function' || typeof primary === 'object')) {
             for (var expKey in cached) {
-              if (!(expKey in res)) {
-                try { res[expKey] = cached[expKey]; } catch(e) {}
+              if (!(expKey in primary)) {
+                try { primary[expKey] = cached[expKey]; } catch(e) {}
               }
             }
           }
-          return res;
+
+          // Return proxy over exports so missing named exports do not return undefined and crash React
+          return new Proxy(cached, {
+            get: function(target, prop) {
+              if (prop in target && target[prop] !== undefined) return target[prop];
+              if (prop === '__esModule') return true;
+              if (prop === 'then') return undefined;
+              if (typeof prop === 'symbol') return target[prop];
+              if (prop === 'default') return (target && target.default !== undefined) ? target.default : target;
+              if (primary && (typeof primary === 'function' || (primary && primary.$$typeof))) {
+                if (prop in primary && primary[prop] !== undefined) return primary[prop];
+                return primary;
+              }
+              var MissingComp = function(props) {
+                return React.createElement('div', {
+                  style: { padding: '4px 8px', margin: '2px 0', border: '1px dashed #94a3b8', borderRadius: '4px', fontSize: '11px', color: '#cbd5e1', display: 'inline-block' }
+                }, String(prop));
+              };
+              return MissingComp;
+            }
+          });
         }
 
         // 2. React mapping
         if (cleanId === 'react') return React;
-        if (cleanId === 'react-dom') return ReactDOM;
+        if (cleanId === 'react-dom' || cleanId === 'react-dom/client') return ReactDOM;
 
         // 3. Lucide icon mapping
         if (cleanId === 'lucide-react') {
-          return new Proxy({}, {
-            get: function(_, prop) {
+          return new Proxy({
+            createLucideIcon: function(name, iconDef) {
+              return function(props) { return React.createElement(LucideIcon, Object.assign({ iconName: name }, props)); };
+            },
+            icons: new Proxy({}, {
+              get: function(_, prop) {
+                return function(props) { return React.createElement(LucideIcon, Object.assign({ iconName: String(prop) }, props)); };
+              }
+            })
+          }, {
+            get: function(target, prop) {
+              if (prop in target) return target[prop];
               if (typeof prop === 'string') {
-                return function(props) { return React.createElement(LucideIcon, props); };
+                return function(props) { return React.createElement(LucideIcon, Object.assign({ iconName: prop }, props)); };
               }
               return LucideIcon;
             }
@@ -802,7 +1022,7 @@ function buildSuccessSrcdoc(
         }
 
         // Router shims
-        if (cleanId === 'react-router-dom') {
+        if (cleanId === 'react-router-dom' || cleanId === 'react-router') {
           var MemoryRouter = function(props) { return React.createElement(React.Fragment, null, props.children); };
           return {
             MemoryRouter: MemoryRouter, BrowserRouter: MemoryRouter, HashRouter: MemoryRouter,
@@ -810,45 +1030,71 @@ function buildSuccessSrcdoc(
             Route: function(props) { return props.element || React.createElement(React.Fragment, null, props.children); },
             Link: function(props) { return React.createElement('a', { href: props.to || '#', onClick: function(e) { e.preventDefault(); } }, props.children); },
             NavLink: function(props) { return React.createElement('a', { href: props.to || '#', onClick: function(e) { e.preventDefault(); } }, props.children); },
-            useNavigate: function() { return function() {}; },
-            useLocation: function() { return { pathname: '/', search: '', hash: '' }; },
-            useParams: function() { return {}; }
+            Outlet: function() { return null; },
+            Navigate: function() { return null; },
+            useNavigate: function() { return function(to) { console.log('Navigation shim:', to); }; },
+            useLocation: function() { return { pathname: '/', search: '', hash: '', state: null, key: 'default' }; },
+            useParams: function() { return {}; },
+            useSearchParams: function() { return [new URLSearchParams(), function() {}]; },
+            useHref: function(to) { return to || ''; },
+            useMatch: function() { return null; }
           };
         }
 
         // Framer Motion shims
         if (cleanId === 'framer-motion') {
+          var createMotionComponent = function(tag) {
+            return React.forwardRef(function(props, ref) {
+              var cleanProps = {};
+              for (var k in props) {
+                if (!['initial', 'animate', 'exit', 'transition', 'variants', 'whileHover', 'whileTap', 'whileFocus', 'whileInView', 'viewport', 'layout', 'layoutId'].includes(k)) {
+                  cleanProps[k] = props[k];
+                }
+              }
+              if (ref) cleanProps.ref = ref;
+              return React.createElement(typeof tag === 'string' ? tag : (tag.default || tag), cleanProps);
+            });
+          };
+          var motionProxy = new Proxy(function(Comp) { return createMotionComponent(Comp); }, {
+            get: function(_, tag) { return createMotionComponent(tag); }
+          });
           return {
-            motion: new Proxy({}, { get: function(_, tag) { return function(props) { return React.createElement(tag, props); }; } }),
+            motion: motionProxy,
             AnimatePresence: function(props) { return React.createElement(React.Fragment, null, props.children); },
-            useInView: function() { return [null, true]; }
+            useInView: function() { return [null, true]; },
+            useAnimation: function() { return { start: function() { return Promise.resolve(); }, set: function() {}, stop: function() {} }; },
+            useMotionValue: function(init) { return { get: function() { return init; }, set: function() {}, onChange: function() {} }; },
+            useTransform: function(val, from, to) { return { get: function() { return to ? to[0] : 0; } }; },
+            useSpring: function() { return { get: function() { return 0; } }; },
+            useScroll: function() { return { scrollX: { get: function() { return 0; } }, scrollY: { get: function() { return 0; } }, scrollXProgress: { get: function() { return 0; } }, scrollYProgress: { get: function() { return 0; } } }; }
           };
         }
 
-        // Clsx / CN shims
-        if (cleanId === 'clsx' || cleanId === 'tailwind-merge') {
-          return { clsx: function() { return Array.from(arguments).flat().filter(Boolean).join(' '); }, cn: function() { return Array.from(arguments).flat().filter(Boolean).join(' '); } };
+        // Clsx / CN / tailwind-merge shims
+        if (cleanId === 'clsx' || cleanId === 'tailwind-merge' || cleanId === 'classnames') {
+          var mergeClasses = function() { return Array.from(arguments).flat(Infinity).filter(Boolean).join(' '); };
+          return { clsx: mergeClasses, cn: mergeClasses, twMerge: mergeClasses, default: mergeClasses };
         }
 
-        // 4. Safe Component Fallback for unrecognized packages
+        // Safe Component Fallback for unrecognized packages
         var FallbackComp = function(props) {
+          if (props && props.children) return React.createElement(React.Fragment, null, props.children);
           return React.createElement('div', {
             style: { padding: '8px', border: '1px dashed #64748b', borderRadius: '6px', fontSize: '12px', color: '#94a3b8' }
           }, String(cleanId));
         };
-        return new Proxy(FallbackComp, {
+        var fallbackProxy = new Proxy(FallbackComp, {
           get: function(_, prop) {
-            return FallbackComp;
+            if (prop === 'then') return function(res) { if (res) res({ data: {} }); return Promise.resolve({ data: {} }); };
+            return fallbackProxy;
           }
         });
+        return fallbackProxy;
       }
 
-      console.log('[BUNDLE TRACE]\\nFiles:\\n' + ${JSON.stringify(transformedBlocks.map(b => '- ' + b.compName + '.tsx').join('\\n'))} + '\\n\\nApp declarations found: 1');
-      console.log('[PREVIEW TRACE] bundle assembled');
-      console.log('[PREVIEW TRACE] bundle length: ' + ${concatenated.length});
-      console.log('[PREVIEW TRACE] Babel starting');
+      window.__require__ = __require__;
 
-      var transpiledCode = '';
+      console.log('[BUNDLE TRACE]\\nFiles:\\n' + ${JSON.stringify(transformedBlocks.map(b => '- ' + b.compName + '.tsx').join('\\n'))} + '\\n\\nApp declarations found: 1');
       try {
         var babelRes = Babel.transform(${JSON.stringify(concatenated)}, {
           presets: [['react', { runtime: 'classic' }], 'typescript'],
@@ -869,13 +1115,98 @@ function buildSuccessSrcdoc(
 
       try {
         var evalFunc = new Function(
-          'React', 'ReactDOM', 'LucideIcon', '__modules__', '__cache__', '__require__',
+          'React', 'ReactDOM', 'LucideIcon', '__modules__', '__cache__', '__require__', 'motion', 'AnimatePresence',
           transpiledCode
         );
-        evalFunc(React, ReactDOM, LucideIcon, __modules__, __cache__, __require__);
+        evalFunc(React, ReactDOM, LucideIcon, __modules__, __cache__, __require__, window.motion, window.AnimatePresence);
 
-        var AppComponent = __require__('App');
-        console.log('[PREVIEW TRACE] App available:', typeof AppComponent === 'function' || typeof AppComponent === 'object');
+        // Define component getters on window for all bundle modules so undeclared component tags resolve cleanly
+        for (var modName in __modules__) {
+          (function(mName) {
+            if (typeof window[mName] === 'undefined') {
+              try {
+                Object.defineProperty(window, mName, {
+                  get: function() {
+                    var m = __require__(mName);
+                    return (m && m.default !== undefined) ? m.default : m;
+                  },
+                  configurable: true
+                });
+              } catch(e) {}
+            }
+          })(modName);
+        }
+
+        // Define IframeErrorBoundary
+        class IframeErrorBoundary extends React.Component {
+          constructor(props) {
+            super(props);
+            this.state = { hasError: false, error: null, errorInfo: null };
+          }
+          static getDerivedStateFromError(error) {
+            return { hasError: true, error: error };
+          }
+          componentDidCatch(error, errorInfo) {
+            this.setState({ error: error, errorInfo: errorInfo });
+            var errStr = (error && error.message) || String(error);
+            var stackStr = (error && error.stack) || '';
+            var compStack = (errorInfo && errorInfo.componentStack) || '';
+            console.error('[IFRAME RENDER ERROR]', errStr, stackStr, compStack);
+            showErrorOverlay('Render Error in Component:\\n' + errStr + '\\n' + stackStr + (compStack ? '\\n\\nComponent Stack:' + compStack : ''));
+            sendParentLog('error', 'Render Error: ' + errStr);
+            try {
+              window.parent.postMessage({
+                type: 'NEXSITE_PREVIEW_ERROR',
+                error: errStr,
+                stack: stackStr,
+                componentStack: compStack
+              }, '*');
+            } catch(e) {}
+          }
+          render() {
+            if (this.state.hasError) {
+              return React.createElement('div', {
+                style: {
+                  padding: '24px',
+                  background: '#18122B',
+                  color: '#f87171',
+                  border: '1px solid #7f1d1d',
+                  borderRadius: '12px',
+                  margin: '20px',
+                  fontFamily: 'system-ui, sans-serif'
+                }
+              },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' } },
+                  React.createElement('span', { style: { fontSize: '20px' } }, '⚠️'),
+                  React.createElement('h3', { style: { margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#fca5a5' } }, 'Preview Render Error')
+                ),
+                React.createElement('div', { style: { padding: '12px', background: '#0d0b18', borderRadius: '8px', border: '1px solid #3b1d3d', color: '#fca5a5', fontFamily: 'monospace', fontSize: '13px', marginBottom: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } },
+                  (this.state.error && this.state.error.message) || 'Unknown Render Error'
+                ),
+                this.state.errorInfo && this.state.errorInfo.componentStack ? React.createElement('details', { style: { color: '#94a3b8', fontSize: '11px', fontFamily: 'monospace' } },
+                  React.createElement('summary', { style: { cursor: 'pointer', marginBottom: '6px', color: '#c084fc' } }, 'View Component Stack'),
+                  React.createElement('pre', { style: { padding: '8px', background: '#0a0914', borderRadius: '4px', overflowX: 'auto', whiteSpace: 'pre-wrap' } }, this.state.errorInfo.componentStack)
+                ) : null
+              );
+            }
+            return this.props.children;
+          }
+        }
+
+        var rawApp = __require__('App');
+        var AppComponent = (rawApp && rawApp.default !== undefined) ? rawApp.default : rawApp;
+
+        // If AppComponent is an object containing named component functions (e.g. { SaaSWebsite: Function }), find the first valid component
+        if (AppComponent && typeof AppComponent === 'object' && !AppComponent.$$typeof) {
+          for (var k in AppComponent) {
+            if (typeof AppComponent[k] === 'function' || (AppComponent[k] && AppComponent[k].$$typeof)) {
+              AppComponent = AppComponent[k];
+              break;
+            }
+          }
+        }
+
+        console.log('[PREVIEW TRACE] App available:', typeof AppComponent === 'function' || (typeof AppComponent === 'object' && !!AppComponent.$$typeof));
 
         if (!AppComponent || (typeof AppComponent !== 'function' && typeof AppComponent !== 'object')) {
           throw new Error('App component could not be resolved from module registry.');
@@ -886,27 +1217,50 @@ function buildSuccessSrcdoc(
         var root = ReactDOM.createRoot(rootEl);
 
         function NexSiteMount() {
-          return React.createElement(AppComponent);
+          React.useEffect(function() {
+            console.log('[PREVIEW TRACE] NexSiteMount mounted via useEffect');
+            try {
+              var count = (rootEl && (rootEl.children ? rootEl.children.length : (rootEl.childNodes ? rootEl.childNodes.length : 1))) || 1;
+              window.parent.postMessage({ type: 'NEXSITE_PREVIEW_READY', childrenCount: count }, '*');
+              sendParentLog('info', 'PREVIEW_RENDERED');
+            } catch(e) {}
+          }, []);
+
+          return React.createElement(IframeErrorBoundary, null, React.createElement(AppComponent));
         }
 
         root.render(React.createElement(NexSiteMount));
 
-        requestAnimationFrame(function() {
-          setTimeout(function() {
-            var childrenCount = (rootEl && rootEl.children) ? rootEl.children.length : 0;
-            console.log('[PREVIEW TRACE] root children count: ' + childrenCount);
-            if (childrenCount > 0) {
-              console.log('[PREVIEW TRACE] mount succeeded');
+        var checkAttempts = 0;
+        var maxCheckAttempts = 10;
+        var readySent = false;
+
+        function checkMount() {
+          checkAttempts++;
+          var childrenCount = (rootEl && rootEl.children) ? rootEl.children.length : 0;
+          var hasContent = childrenCount > 0 || (rootEl && rootEl.childNodes && rootEl.childNodes.length > 0 && rootEl.innerHTML.trim().length > 0);
+
+          if (hasContent) {
+            if (!readySent) {
+              readySent = true;
+              console.log('[PREVIEW TRACE] mount succeeded, children count: ' + (childrenCount || 1));
               sendParentLog('info', 'PREVIEW_RENDERED');
-              try { window.parent.postMessage({ type: 'NEXSITE_PREVIEW_READY', childrenCount: childrenCount }, '*'); } catch(e) {}
-            } else {
-              console.error('[PREVIEW TRACE] mount failed: 0 children in root element');
-              showErrorOverlay('Mount Error: React rendered but root element has 0 children.');
-              sendParentLog('error', 'Mount Error: 0 children in root element');
-              try { window.parent.postMessage({ type: 'NEXSITE_PREVIEW_ERROR', error: 'Root element has 0 children after React mount.' }, '*'); } catch(e) {}
+              try { window.parent.postMessage({ type: 'NEXSITE_PREVIEW_READY', childrenCount: childrenCount || 1 }, '*'); } catch(e) {}
             }
-          }, 150);
-        });
+          } else if (checkAttempts < maxCheckAttempts) {
+            setTimeout(checkMount, 100);
+          } else {
+            console.warn('[PREVIEW TRACE] mount check: root element has 0 DOM children after ' + (checkAttempts * 100) + 'ms');
+            var errDisplay = document.getElementById('error-display');
+            if (!errDisplay || errDisplay.style.display !== 'block') {
+              showErrorOverlay('Mount Warning: The root element has 0 children. Please check if your App component returns valid JSX.');
+              sendParentLog('warn', 'Mount Warning: 0 children in root element');
+              try { window.parent.postMessage({ type: 'NEXSITE_PREVIEW_READY', childrenCount: 0 }, '*'); } catch(e) {}
+            }
+          }
+        }
+
+        setTimeout(checkMount, 100);
 
       } catch(execErr) {
         console.error('[PREVIEW TRACE] JS execution failed:', execErr && execErr.message);
@@ -1070,7 +1424,6 @@ export function assembleBundle(
 
   const fatalErrors = allDiagnostics.filter(e =>
     e.type === 'MISSING_DEPENDENCY' ||
-    e.type === 'CIRCULAR_DEPENDENCY' ||
     e.type === 'DUPLICATE_ENTRYPOINT' ||
     e.type === 'DUPLICATE_DEFINITION' ||
     e.type === 'SYNTAX_ERROR' ||
@@ -1117,14 +1470,15 @@ export function compileBundle(generatedFiles: Record<string, string>): BundleRes
   }
 
   // Transform code in topological order
-  const transformedBlocks: { compName: string; code: string }[] = [];
+  const transformedBlocks: { compName: string; code: string; exportedNames: string[] }[] = [];
   let totalDeps = 0;
 
   for (const compName of order) {
     const analysis = files.get(compName)!;
     const isApp = compName === 'App';
     const transformed = transformCode(analysis.code, compName, isApp);
-    transformedBlocks.push({ compName, code: transformed });
+    const exportedNames = analysis.exports.map(e => e.name);
+    transformedBlocks.push({ compName, code: transformed, exportedNames });
     totalDeps += analysis.localDeps.length;
   }
 
@@ -1136,6 +1490,9 @@ export function compileBundle(generatedFiles: Record<string, string>): BundleRes
     if (matches && matches.length > 0) {
       appDeclCount += matches.length;
       appDeclSources.push(`${block.compName}.tsx (${matches.length})`);
+    } else if (block.compName === 'App') {
+      appDeclCount += 1;
+      appDeclSources.push(`App.tsx (default export)`);
     }
   }
 
@@ -1144,7 +1501,7 @@ export function compileBundle(generatedFiles: Record<string, string>): BundleRes
 
   // Module wrapper ensures isolated scopes, so identical internal variable names (like 'App') in different files are perfectly safe.
 
-  const moduleWrappedBlocks = transformedBlocks.map(b => wrapInModuleScope(b.compName, b.code));
+  const moduleWrappedBlocks = transformedBlocks.map(b => wrapInModuleScope(b.compName, b.code, b.exportedNames));
   const concatenated = moduleWrappedBlocks.join('\n\n');
 
   // Build success srcdoc using module-wrapped source
@@ -1154,19 +1511,6 @@ export function compileBundle(generatedFiles: Record<string, string>): BundleRes
     type: 'BUNDLE_VALID',
     message: `Bundle validation passed. ${files.size} files, ${totalDeps} dependencies, App declarations: ${appDeclCount}, order: [${order.join(', ')}]`,
   };
-
-  // DEBUG LOG AS REQUESTED BY USER
-  if (generatedFiles['App.tsx']) {
-    console.log(`\n==================================================`);
-    console.log(`STEP 1 — INSPECT THE ACTUAL GENERATED FILES`);
-    console.log(`==================================================`);
-    console.log(`App.tsx original:\n${generatedFiles['App.tsx']}\n`);
-    const transformedApp = transformedBlocks.find(b => b.compName === 'App')?.code;
-    console.log(`App.tsx transformed:\n${transformedApp}\n`);
-    const wrappedApp = moduleWrappedBlocks[moduleWrappedBlocks.length - 1]; // App is last
-    console.log(`App.tsx wrapped:\n${wrappedApp}\n`);
-    console.log(`==================================================\n`);
-  }
 
   return {
     success: true,

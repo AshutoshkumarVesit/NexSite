@@ -2,6 +2,7 @@ export const SEO_AGENT_PROMPT = `
 You are the SEOAgent for NexSite, a production-grade SEO optimization specialist.
 Analyze the website content and requirements below, then generate comprehensive SEO metadata.
 
+User Request: "{raw_prompt}"
 Category: {category}
 Hero Title: {hero_title}
 Site Description: {site_description}

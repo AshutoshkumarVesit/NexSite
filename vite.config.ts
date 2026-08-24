@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ProviderManager } from './src/infrastructure/llm/ProviderManager.ts';
 import { ModelRegistry } from './src/infrastructure/llm/ModelRegistry.ts';
@@ -74,11 +75,154 @@ function backendLLMPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
 
+        // ── Video streaming with byte-ranges (.mp4) ─────────────────────────
+        if (req.url && !req.url.includes('?import') && !req.url.includes('&import') && (req.url.startsWith('/typing-bg.mp4') || req.url.startsWith('/typing-bg') || req.url.endsWith('.mp4'))) {
+          const possiblePaths = [
+            path.resolve(__dirname, 'public', 'typing-bg.mp4'),
+            path.resolve(__dirname, 'src', 'assets', 'typing-bg.mp4'),
+            path.resolve(__dirname, 'bg video', 'Developer_typing_on_mechanical_k._202608232147.mp4')
+          ];
+          const videoPath = possiblePaths.find(p => fs.existsSync(p));
+          if (videoPath) {
+            const stat = fs.statSync(videoPath);
+            const fileSize = stat.size;
+            const range = req.headers.range;
+
+            if (range) {
+              const parts = range.replace(/bytes=/, '').split('-');
+              const start = parseInt(parts[0], 10);
+              const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+              const chunksize = (end - start) + 1;
+              const file = fs.createReadStream(videoPath, { start, end });
+              res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': 'video/mp4',
+                'Cache-Control': 'public, max-age=31536000, immutable'
+              });
+              file.pipe(res);
+            } else {
+              res.writeHead(200, {
+                'Content-Length': fileSize,
+                'Content-Type': 'video/mp4',
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=31536000, immutable'
+              });
+              fs.createReadStream(videoPath).pipe(res);
+            }
+            return;
+          }
+        }
+
         // ── GET /health ──────────────────────────────────────────────────────
         if (req.url === '/health' && req.method === 'GET') {
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+          return;
+        }
+
+        // ── AUTH ─────────────────────────────────────────────────────────────
+        // Demo users – isolated here for easy replacement with real auth
+        const DEMO_USERS = [
+          { id: 'usr_admin_001', name: 'NexSite Admin', email: 'admin@nexsite.ai', password: 'Admin@123', role: 'admin' as const },
+          { id: 'usr_user_001',  name: 'Demo User',     email: 'user@nexsite.ai',  password: 'User@123',  role: 'user'  as const },
+        ];
+        // ponytail: simple base64 "signature" – replace with real HMAC/JWT for production
+        const TOKEN_SECRET = 'nexsite-demo-secret-2026';
+        function signToken(payload: Record<string, any>): string {
+          const data = JSON.stringify({ ...payload, exp: Date.now() + 24 * 60 * 60 * 1000 });
+          const sig = Buffer.from(data + '|' + TOKEN_SECRET).toString('base64');
+          return Buffer.from(data).toString('base64') + '.' + sig;
+        }
+        function verifyToken(token: string): Record<string, any> | null {
+          try {
+            const [dataB64, sigB64] = token.split('.');
+            const data = Buffer.from(dataB64, 'base64').toString();
+            const expectedSig = Buffer.from(data + '|' + TOKEN_SECRET).toString('base64');
+            if (sigB64 !== expectedSig) return null;
+            const parsed = JSON.parse(data);
+            if (parsed.exp && parsed.exp < Date.now()) return null;
+            return parsed;
+          } catch { return null; }
+        }
+
+        // POST /auth/login
+        if (req.url === '/auth/login' && req.method === 'POST') {
+          let body = '';
+          req.on('data', (c: Buffer) => { body += c.toString(); });
+          req.on('end', () => {
+            try {
+              const { email, password } = JSON.parse(body || '{}');
+              const user = DEMO_USERS.find(u => u.email === email && u.password === password);
+              if (!user) {
+                res.statusCode = 401;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: 'Invalid email or password.' }));
+                return;
+              }
+              const token = signToken({ id: user.id, email: user.email, name: user.name, role: user.role });
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } }));
+            } catch {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Invalid request body.' }));
+            }
+          });
+          return;
+        }
+
+        // GET /auth/verify
+        if (req.url === '/auth/verify' && req.method === 'GET') {
+          const authHeader = req.headers['authorization'] || '';
+          const token = authHeader.replace('Bearer ', '');
+          const payload = verifyToken(token);
+          if (!payload) {
+            res.statusCode = 401;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Invalid or expired token.' }));
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ user: { id: payload.id, name: payload.name, email: payload.email, role: payload.role } }));
+          return;
+        }
+
+        // POST /auth/signup (demo – adds to in-memory list for session only)
+        if (req.url === '/auth/signup' && req.method === 'POST') {
+          let body = '';
+          req.on('data', (c: Buffer) => { body += c.toString(); });
+          req.on('end', () => {
+            try {
+              const { name, email, password } = JSON.parse(body || '{}');
+              if (!name || !email || !password) {
+                res.statusCode = 400;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: 'Name, email, and password are required.' }));
+                return;
+              }
+              if (DEMO_USERS.find(u => u.email === email)) {
+                res.statusCode = 409;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: 'An account with this email already exists.' }));
+                return;
+              }
+              const newUser = { id: `usr_${Date.now()}`, name, email, password, role: 'user' as const };
+              DEMO_USERS.push(newUser);
+              const token = signToken({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role });
+              res.statusCode = 201;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ token, user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role } }));
+            } catch {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Invalid request body.' }));
+            }
+          });
           return;
         }
 
@@ -183,5 +327,19 @@ function backendLLMPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), backendLLMPlugin()],
-  server: { port: 5173 }
+  server: {
+    port: 5173,
+    watch: {
+      ignored: [
+        '**/bg video/**',
+        '**/*.mp4',
+        '**/*.mkv',
+        '**/*.mov',
+        '**/*.avi',
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/dist/**'
+      ]
+    }
+  }
 });

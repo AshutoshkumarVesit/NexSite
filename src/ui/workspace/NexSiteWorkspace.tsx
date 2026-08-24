@@ -19,7 +19,14 @@ import {
   Sliders,
   Eye,
   AlertCircle,
-  Bug
+  Bug,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Maximize2,
+  Minimize2,
+  Monitor,
+  Tablet,
+  Smartphone
 } from 'lucide-react';
 import type { PipelineState, RendererDiagnostics } from '../../core/entities/PipelineState';
 import { compileBundle } from './BundleCompiler';
@@ -38,6 +45,8 @@ export default function NexSiteWorkspace() {
   const [copied, setCopied] = useState(false);
   const [backendLogs, setBackendLogs] = useState<string[]>([]);
   const [backendHealth, setBackendHealth] = useState<'unknown' | 'healthy' | 'error'>('unknown');
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
+  const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
 
   // Initial State
   const [pipelineState, setPipelineState] = useState<PipelineState>({
@@ -404,20 +413,35 @@ JSX actually rendered in the preview:
       {/* Top Navigation Header */}
       <header className="h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-purple-500/25">
-            <Sparkles className="w-6 h-6 text-white animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-purple-200 to-pink-400 bg-clip-text text-transparent">
-                NexSite
-              </h1>
-              <span className="px-2 py-0.5 rounded-full bg-purple-950 border border-purple-800 text-[10px] font-semibold uppercase tracking-wider text-purple-300">
-                Pipeline Diagnostic Studio
-              </span>
+          <button
+            onClick={() => setIsLeftPanelOpen(!isLeftPanelOpen)}
+            className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5 text-xs shadow-sm"
+            title={isLeftPanelOpen ? "Hide Left Panel (Full Width Preview)" : "Show Left Panel"}
+          >
+            {isLeftPanelOpen ? <PanelLeftClose className="w-4 h-4 text-purple-400" /> : <PanelLeftOpen className="w-4 h-4 text-purple-400" />}
+            <span className="hidden md:inline font-medium">{isLeftPanelOpen ? 'Hide Panel' : 'Show Panel'}</span>
+          </button>
+
+          <a
+            href="#/"
+            className="flex items-center gap-3 hover:opacity-90 transition-opacity cursor-pointer text-inherit no-underline"
+            title="Go to NexSite Landing Page"
+          >
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-purple-500/25 shrink-0">
+              <Sparkles className="w-6 h-6 text-white animate-pulse" />
             </div>
-            <p className="text-xs text-slate-400 font-mono">6 Category Blueprints + Full Agent Output Trace</p>
-          </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-purple-200 to-pink-400 bg-clip-text text-transparent">
+                  NexSite
+                </h1>
+                <span className="px-2 py-0.5 rounded-full bg-purple-950 border border-purple-800 text-[10px] font-semibold uppercase tracking-wider text-purple-300">
+                  Pipeline Diagnostic Studio
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 font-mono">6 Category Blueprints + Full Agent Output Trace</p>
+            </div>
+          </a>
         </div>
 
         {/* Top Bar Config Controls */}
@@ -457,16 +481,17 @@ JSX actually rendered in the preview:
       {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Control & Agent Flow Studio */}
-        <div className="w-[420px] border-r border-slate-800 bg-slate-900/50 flex flex-col shrink-0">
-          {/* Prompt Studio Input */}
-          <div className="p-4 border-b border-slate-800">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Natural Language Prompt
-              </span>
-              <span className="text-[10px] text-purple-400 font-mono">Select Category Below</span>
-            </label>
-            <textarea
+        {isLeftPanelOpen && (
+          <div className="w-[400px] xl:w-[420px] border-r border-slate-800 bg-slate-900/50 flex flex-col shrink-0 transition-all duration-300">
+            {/* Prompt Studio Input */}
+            <div className="p-4 border-b border-slate-800">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Natural Language Prompt
+                </span>
+                <span className="text-[10px] text-purple-400 font-mono">Select Category Below</span>
+              </label>
+              <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
@@ -585,9 +610,10 @@ JSX actually rendered in the preview:
             </div>
           </div>
         </div>
+      )}
 
         {/* Right Output Stage */}
-        <div className="flex-1 flex flex-col bg-slate-950">
+        <div className="flex-1 flex flex-col bg-slate-950 min-w-0">
           {/* Workspace Tabs */}
           <div className="h-12 border-b border-slate-800 bg-slate-900/60 px-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -681,28 +707,74 @@ JSX actually rendered in the preview:
                 ) : (
                   <div className="flex-1 rounded-2xl border border-slate-800 overflow-hidden bg-slate-950 shadow-2xl flex flex-col">
                     {/* Simulated Browser Bar */}
-                    <div className="h-9 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between">
+                    <div className="h-10 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between shrink-0">
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-rose-500/80" />
+                          <div className="w-3 h-3 rounded-full bg-amber-500/80" />
+                          <div className="w-3 h-3 rounded-full bg-emerald-500/80" />
+                        </div>
+                        <div className="px-3 py-0.5 rounded-md bg-slate-950 text-xs font-mono text-slate-400 border border-slate-800 flex items-center gap-1.5">
+                          <span className="text-emerald-400">https://</span>nexsite.preview/{pipelineState.requirements.category.toLowerCase()}
+                        </div>
+                        <div className="hidden lg:inline-block text-[10px] font-mono text-emerald-300 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800 uppercase">
+                          {pipelineState.generated_files['App.tsx'] ? '⚡ AI GENERATED WEBSITE' : '⌛ Awaiting generation...'}
+                        </div>
+                      </div>
+
+                      {/* Device & Full Width Preview Toggles */}
                       <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full bg-rose-500/80" />
-                        <div className="w-3 h-3 rounded-full bg-amber-500/80" />
-                        <div className="w-3 h-3 rounded-full bg-emerald-500/80" />
-                      </div>
-                      <div className="px-4 py-0.5 rounded-md bg-slate-950 text-xs font-mono text-slate-400 border border-slate-800 flex items-center gap-2">
-                        <span className="text-emerald-400">https://</span>nexsite.preview/{pipelineState.requirements.category.toLowerCase()}
-                      </div>
-                      <div className="text-[10px] font-mono text-emerald-300 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800 uppercase">
-                        {pipelineState.generated_files['App.tsx'] ? '⚡ AI GENERATED WEBSITE' : '⌛ Awaiting generation...'}
+                        <div className="flex items-center bg-slate-950 rounded-lg p-0.5 border border-slate-800">
+                          <button
+                            onClick={() => setPreviewDevice('desktop')}
+                            className={`p-1.5 rounded-md text-xs cursor-pointer transition-colors ${previewDevice === 'desktop' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                            title="Desktop View (100% full width)"
+                          >
+                            <Monitor className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setPreviewDevice('tablet')}
+                            className={`p-1.5 rounded-md text-xs cursor-pointer transition-colors ${previewDevice === 'tablet' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                            title="Tablet View (768px)"
+                          >
+                            <Tablet className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setPreviewDevice('mobile')}
+                            className={`p-1.5 rounded-md text-xs cursor-pointer transition-colors ${previewDevice === 'mobile' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                            title="Mobile View (375px)"
+                          >
+                            <Smartphone className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <button
+                          onClick={() => setIsLeftPanelOpen(!isLeftPanelOpen)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 cursor-pointer transition-all"
+                          title={isLeftPanelOpen ? "Hide Side Panel (Full Width Preview)" : "Show Side Panel"}
+                        >
+                          {isLeftPanelOpen ? <Maximize2 className="w-3.5 h-3.5 text-purple-400" /> : <Minimize2 className="w-3.5 h-3.5 text-purple-400" />}
+                          <span className="hidden sm:inline font-medium">{isLeftPanelOpen ? 'Expand Preview' : 'Show Controls'}</span>
+                        </button>
                       </div>
                     </div>
 
-                    {/* Rendered Live Website Canvas with Error Boundary */}
-                    <div className="flex-1 overflow-auto bg-slate-950">
-                      <PreviewErrorBoundary state={pipelineState}>
-                        <LiveWebsiteRenderer
-                          state={pipelineState}
-                          onBundleDiagnostics={handleBundleDiagnostics}
-                        />
-                      </PreviewErrorBoundary>
+                    {/* Rendered Live Website Canvas with Error Boundary & Responsive Centering */}
+                    <div className="flex-1 overflow-auto bg-slate-950 flex justify-center items-start">
+                      <div
+                        className="h-full transition-all duration-300 w-full"
+                        style={{
+                          maxWidth: previewDevice === 'mobile' ? '375px' : previewDevice === 'tablet' ? '768px' : '100%',
+                          boxShadow: previewDevice !== 'desktop' ? '0 0 40px rgba(0,0,0,0.8)' : 'none'
+                        }}
+                      >
+                        <PreviewErrorBoundary state={pipelineState}>
+                          <LiveWebsiteRenderer
+                            state={pipelineState}
+                            onBundleDiagnostics={handleBundleDiagnostics}
+                          />
+                        </PreviewErrorBoundary>
+                      </div>
                     </div>
                   </div>
                 )}

@@ -24,6 +24,7 @@ export class UIAgent implements IAgent {
     }
 
     const promptText = UI_AGENT_PROMPT
+      .replace('{raw_prompt}', requirements.raw_prompt || requirements.category)
       .replace('{category}', requirements.category)
       .replace('{tone}', requirements.tone || 'bold')
       .replace('{preferred_theme}', requirements.preferred_theme || 'dark')
@@ -35,11 +36,12 @@ export class UIAgent implements IAgent {
     let retryAttempted = false;
 
     try {
-      const rawSpec = await this.llmProvider.generateJSON<Partial<UISpecification>>(
+      const rawSpec = await this.llmProvider.generateJSON<any>(
         promptText,
         'UISpecification JSON Object'
       );
-      uiSpec = this.validateAndNormalizeUISpec(rawSpec, requirements);
+      const unwrapped = (rawSpec?.ui_spec || rawSpec?.UISpecification || rawSpec?.data || rawSpec) as Partial<UISpecification>;
+      uiSpec = this.validateAndNormalizeUISpec(unwrapped, requirements);
     } catch (firstError) {
       retryAttempted = true;
       try {

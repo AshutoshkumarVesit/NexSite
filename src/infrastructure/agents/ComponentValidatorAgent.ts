@@ -90,6 +90,44 @@ export class ComponentValidatorAgent {
       }
     }
 
+    // ── Visual Quality Checks (warnings logged, not hard failures) ──
+    const warnings: string[] = [];
+
+    // Check for parent-app navigation (hard error — this breaks the preview)
+    if (/href\s*=\s*["']\/["']/.test(code) && !code.includes('scrollIntoView') && !code.includes('#')) {
+      errors.push('Component contains href="/" which navigates to the parent application. Use "#sectionId" anchors or onClick scroll handlers instead.');
+    }
+    if (/href\s*=\s*["']https?:\/\/localhost/.test(code)) {
+      errors.push('Component contains href pointing to localhost. Generated websites must not navigate to the parent application.');
+    }
+
+    // Warn: img without alt
+    if (/<img\b/.test(code) && !(/alt\s*=/.test(code))) {
+      warnings.push(`[Quality] ${expectedFileName}: <img> tag found without alt attribute.`);
+    }
+
+    // Warn: img without onError fallback
+    if (/<img\b/.test(code) && !(/onError/.test(code))) {
+      warnings.push(`[Quality] ${expectedFileName}: <img> tag found without onError fallback. Images may break.`);
+    }
+
+    // Warn: no responsive breakpoints in non-App components
+    if (!expectedFileName.includes('App') && code.length > 200) {
+      if (!/(?:sm:|md:|lg:|xl:)/.test(code)) {
+        warnings.push(`[Quality] ${expectedFileName}: No responsive breakpoint classes (sm:/md:/lg:) detected.`);
+      }
+    }
+
+    // Warn: suspiciously short component (likely placeholder)
+    if (code.length < 200 && !expectedFileName.includes('App')) {
+      warnings.push(`[Quality] ${expectedFileName}: Component is very short (${code.length} chars). May be a placeholder.`);
+    }
+
+    // Log warnings (don't fail validation for these)
+    for (const w of warnings) {
+      console.warn(`[ComponentValidator] ${w}`);
+    }
+
     return {
       valid: errors.length === 0,
       errors

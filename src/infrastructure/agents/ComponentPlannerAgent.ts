@@ -18,6 +18,7 @@ export class ComponentPlannerAgent implements IAgent {
     const themeMode = state.ui_spec?.theme?.mode || 'light';
 
     const promptText = COMPONENT_PLANNER_PROMPT
+      .replace('{raw_prompt}', state.requirements.raw_prompt || category || 'Custom Web Application')
       .replace('{category}', category || 'LandingPage')
       .replace('{key_features}', (key_features || []).join(', '))
       .replace('{theme_mode}', themeMode);
@@ -28,20 +29,22 @@ export class ComponentPlannerAgent implements IAgent {
     const timestamp = new Date().toISOString();
 
     try {
-      const raw = await this.llmProvider.generateJSON<{ components: ComponentDefinition[] }>(
+      const raw = await this.llmProvider.generateJSON<any>(
         promptText,
         'Component Plan JSON'
       );
-      components = this.validateAndNormalize(raw);
+      const unwrapped = (raw?.component_plan || raw?.components ? raw : (raw?.data || raw)) as any;
+      components = this.validateAndNormalize(unwrapped);
     } catch (err) {
       retryAttempted = true;
       try {
         const retryPrompt = `${promptText}\n\nATTENTION: Previous response failed JSON validation. Return 100% valid JSON matching the schema containing a "components" array.`;
-        const retryRaw = await this.llmProvider.generateJSON<{ components: ComponentDefinition[] }>(
+        const retryRaw = await this.llmProvider.generateJSON<any>(
           retryPrompt,
           'Component Plan JSON (Retry)'
         );
-        components = this.validateAndNormalize(retryRaw);
+        const unwrappedRetry = (retryRaw?.component_plan || retryRaw?.components ? retryRaw : (retryRaw?.data || retryRaw)) as any;
+        components = this.validateAndNormalize(unwrappedRetry);
       } catch (err2) {
         usedFallback = true;
         components = this.createDeterministicFallback();

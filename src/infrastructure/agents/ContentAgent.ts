@@ -22,6 +22,7 @@ export class ContentAgent implements IAgent {
     }
 
     const promptText = CONTENT_AGENT_PROMPT
+      .replace('{raw_prompt}', requirements.raw_prompt || requirements.category)
       .replace('{category}', requirements.category)
       .replace('{target_audience}', requirements.target_audience || 'General Users')
       .replace('{key_features}', (requirements.key_features || []).join(', '))
@@ -33,7 +34,7 @@ export class ContentAgent implements IAgent {
 
     // Attempt 1: Active LLM Provider
     try {
-      const rawContent = await this.llmProvider.generateJSON<Partial<ContentMap>>(
+      const rawContent = await this.llmProvider.generateJSON<any>(
         promptText,
         'ContentMap JSON Object'
       );
@@ -42,7 +43,7 @@ export class ContentAgent implements IAgent {
       retryAttempted = true;
       try {
         const retryPrompt = `${promptText}\n\nATTENTION: Previous response failed JSON validation. Return 100% valid JSON matching the exact schema with hero, about, features, testimonials, and footer.`;
-        const retryRaw = await this.llmProvider.generateJSON<Partial<ContentMap>>(
+        const retryRaw = await this.llmProvider.generateJSON<any>(
           retryPrompt,
           'ContentMap JSON Object (Retry)'
         );
@@ -80,45 +81,46 @@ export class ContentAgent implements IAgent {
   }
 
   private validateAndNormalizeContent(
-    raw: Partial<ContentMap>,
+    raw: any,
     reqs: UserRequirements
   ): ContentMap {
     if (!raw || typeof raw !== 'object') {
       throw new Error('ContentAgent Validation Error: Raw response is not an object.');
     }
 
+    const unwrapped = (raw.content || raw.ContentMap || raw.data || raw) as Partial<ContentMap>;
     const fallback = this.createDeterministicFallback(reqs);
 
     const hero = {
-      title: typeof raw.hero?.title === 'string' && raw.hero.title.trim() ? raw.hero.title.trim() : fallback.hero.title,
-      subtitle: typeof raw.hero?.subtitle === 'string' && raw.hero.subtitle.trim() ? raw.hero.subtitle.trim() : fallback.hero.subtitle,
-      cta: typeof raw.hero?.cta === 'string' && raw.hero.cta.trim() ? raw.hero.cta.trim() : fallback.hero.cta
+      title: typeof unwrapped.hero?.title === 'string' && unwrapped.hero.title.trim() ? unwrapped.hero.title.trim() : fallback.hero.title,
+      subtitle: typeof unwrapped.hero?.subtitle === 'string' && unwrapped.hero.subtitle.trim() ? unwrapped.hero.subtitle.trim() : fallback.hero.subtitle,
+      cta: typeof unwrapped.hero?.cta === 'string' && unwrapped.hero.cta.trim() ? unwrapped.hero.cta.trim() : fallback.hero.cta
     };
 
     const about = {
-      title: typeof raw.about?.title === 'string' && raw.about.title.trim() ? raw.about.title.trim() : fallback.about.title,
-      body: typeof raw.about?.body === 'string' && raw.about.body.trim() ? raw.about.body.trim() : fallback.about.body
+      title: typeof unwrapped.about?.title === 'string' && unwrapped.about.title.trim() ? unwrapped.about.title.trim() : fallback.about.title,
+      body: typeof unwrapped.about?.body === 'string' && unwrapped.about.body.trim() ? unwrapped.about.body.trim() : fallback.about.body
     };
 
-    const features = Array.isArray(raw.features) && raw.features.length > 0
-      ? raw.features.map(f => ({
-          title: String(f.title || 'Feature Capability').trim(),
-          description: String(f.description || 'Designed for continuous uptime and efficiency.').trim()
+    const features = Array.isArray(unwrapped.features) && unwrapped.features.length > 0
+      ? unwrapped.features.map((f: any) => ({
+          title: String(f?.title || f?.name || 'Feature Capability').trim(),
+          description: String(f?.description || f?.desc || 'Designed for high performance and seamless experience.').trim()
         }))
       : fallback.features;
 
-    const testimonials = Array.isArray(raw.testimonials) && raw.testimonials.length > 0
-      ? raw.testimonials.map(t => ({
-          name: String(t.name || 'Early Adopter').trim(),
-          role: String(t.role || 'Verified User').trim(),
-          quote: String(t.quote || 'Transformed our workflow completely. Highly recommended!').trim()
+    const testimonials = Array.isArray(unwrapped.testimonials) && unwrapped.testimonials.length > 0
+      ? unwrapped.testimonials.map((t: any) => ({
+          name: String(t?.name || 'Verified User').trim(),
+          role: String(t?.role || t?.title || 'Community Member').trim(),
+          quote: String(t?.quote || t?.comment || 'Transformed our experience completely. Highly recommended!').trim()
         }))
       : fallback.testimonials;
 
     const footer = {
-      copyright: typeof raw.footer?.copyright === 'string' && raw.footer.copyright.trim() ? raw.footer.copyright.trim() : fallback.footer.copyright,
-      links: Array.isArray(raw.footer?.links) && raw.footer.links.length > 0
-        ? raw.footer.links.map(l => String(l).trim()).filter(Boolean)
+      copyright: typeof unwrapped.footer?.copyright === 'string' && unwrapped.footer.copyright.trim() ? unwrapped.footer.copyright.trim() : fallback.footer.copyright,
+      links: Array.isArray(unwrapped.footer?.links) && unwrapped.footer.links.length > 0
+        ? unwrapped.footer.links.map(l => String(l).trim()).filter(Boolean)
         : fallback.footer.links
     };
 
@@ -127,6 +129,34 @@ export class ContentAgent implements IAgent {
 
   private createDeterministicFallback(reqs: UserRequirements): ContentMap {
     const category = reqs.category;
+    const lowerPrompt = (reqs.raw_prompt || '').toLowerCase();
+    const isVideo = category === 'Video Streaming' || /youtube|video|stream|tube/i.test(lowerPrompt);
+
+    if (isVideo) {
+      return {
+        hero: {
+          title: 'Stream, Share, and Discover Millions of Videos',
+          subtitle: 'Join a vibrant community of creators. Watch trending content, subscribe to channels, and stream high-definition media seamlessly.',
+          cta: 'Start Watching Now'
+        },
+        about: {
+          title: 'The Next-Generation Video Platform',
+          body: 'Empowering creators worldwide with 4K ultra-fast video streaming, personalized feeds, live chat, and powerful community engagement.'
+        },
+        features: [
+          { title: '4K Ultra-HD Video Streaming', description: 'Crystal-clear playback with adaptive bitrate and instant bufferless loading.' },
+          { title: 'Personalized Video Discovery', description: 'Intelligent feed curating the latest trending music, gaming, podcasts, and tutorials.' },
+          { title: 'Creator Channels & Memberships', description: 'Subscribe to channels, leave comments, and join exclusive creator communities.' }
+        ],
+        testimonials: [
+          { name: 'Alex Rivera', role: 'Content Creator (1.2M Subs)', quote: 'The most responsive, feature-packed video sharing platform on the web.' }
+        ],
+        footer: {
+          copyright: '© 2026 NexTube Video Network. All rights reserved.',
+          links: ['Home', 'Trending', 'Subscriptions', 'Library', 'History']
+        }
+      };
+    }
 
     if (category === 'Restaurant') {
       return {

@@ -24,24 +24,55 @@ export class ProjectManagerAgent implements IAgent {
     const timestamp = new Date().toISOString();
 
     try {
-      const llmResult = await this.llmProvider.generateJSON<Partial<UserRequirements>>(
+      const rawResult = await this.llmProvider.generateJSON<any>(
         promptText,
         'UserRequirements JSON Object'
       );
 
-      // Trust the LLM completely — only fill in missing fields, never override
+      // Robust unwrapping for LLMs that nest their output inside a root key
+      const data = (rawResult?.UserRequirements || rawResult?.requirements || rawResult?.data || rawResult || {}) as any;
+
+      // Extract category with smart fallbacks
+      let extractedCategory = (data.category || data.project_name || data.domain || data.type || '').trim();
+      if (!extractedCategory) {
+        // Derive category from prompt keywords if LLM omitted it
+        const lowerPrompt = rawPrompt.toLowerCase();
+        if (/youtube|video|stream|tube/i.test(lowerPrompt)) extractedCategory = 'Video Streaming';
+        else if (/restaurant|cafe|dining|food|bistro/i.test(lowerPrompt)) extractedCategory = 'Restaurant';
+        else if (/health|clinic|doctor|hospital|medical/i.test(lowerPrompt)) extractedCategory = 'Healthcare';
+        else if (/crypto|web3|blockchain|token|wallet/i.test(lowerPrompt)) extractedCategory = 'Crypto';
+        else if (/portfolio|developer|designer|resume/i.test(lowerPrompt)) extractedCategory = 'Portfolio';
+        else if (/ecommerce|shop|store|product|buy/i.test(lowerPrompt)) extractedCategory = 'E-Commerce';
+        else if (/agency|studio|creative|marketing/i.test(lowerPrompt)) extractedCategory = 'Agency';
+        else if (/fitness|gym|workout|trainer/i.test(lowerPrompt)) extractedCategory = 'Fitness';
+        else extractedCategory = 'LandingPage';
+      }
+
+      // Extract key_features handling string arrays or object arrays [{feature: "..."}]
+      let extractedFeatures: string[] = [];
+      const rawFeaturesList = data.key_features || data.core_features || data.features || data.sections;
+      if (Array.isArray(rawFeaturesList) && rawFeaturesList.length > 0) {
+        extractedFeatures = rawFeaturesList.map((f: any) => {
+          if (typeof f === 'string') return f.trim();
+          if (f && typeof f === 'object') return (f.feature || f.name || f.title || f.description || '').trim();
+          return '';
+        }).filter(Boolean);
+      }
+
+      if (extractedFeatures.length === 0) {
+        extractedFeatures = ['Hero Showcase', 'Key Capabilities', 'Interactive Demo', 'Community Reviews', 'Contact Section'];
+      }
+
       const requirements: UserRequirements = {
         raw_prompt: rawPrompt,
-        category: (llmResult.category?.trim() || 'LandingPage') as UserRequirements['category'],
-        target_audience: llmResult.target_audience?.trim() || 'General online audience',
-        key_features: Array.isArray(llmResult.key_features) && llmResult.key_features.length > 0
-          ? llmResult.key_features.map(f => String(f).trim()).filter(Boolean)
-          : ['Responsive Layout', 'Modern Design', 'Fast Performance'],
-        preferred_theme: llmResult.preferred_theme || 'dark',
-        tone: llmResult.tone || 'bold'
+        category: extractedCategory as UserRequirements['category'],
+        target_audience: (data.target_audience || data.audience || 'Target users & community').trim(),
+        key_features: extractedFeatures,
+        preferred_theme: data.preferred_theme || 'dark',
+        tone: (data.tone || data.brand_tone || 'bold').trim()
       };
 
-      console.log('[ProjectManagerAgent] Raw LLM result:', JSON.stringify(llmResult));
+      console.log('[ProjectManagerAgent] Raw LLM result:', JSON.stringify(rawResult));
       console.log('[ProjectManagerAgent] Final requirements:', JSON.stringify(requirements));
 
       return {

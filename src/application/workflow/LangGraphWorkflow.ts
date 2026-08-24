@@ -44,16 +44,46 @@ export class LangGraphWorkflow {
     onStateUpdate?: StateUpdateCallback,
     options?: WorkflowOptions
   ): Promise<PipelineState> {
-    let currentState: PipelineState = { ...initialState };
+    let currentState: PipelineState = { 
+      ...initialState,
+      project_metadata: {
+        ...initialState.project_metadata,
+        progress_percent: 5,
+        current_step: 'Initializing pipeline...',
+        status: 'running'
+      }
+    };
+    if (onStateUpdate) {
+      onStateUpdate({ ...currentState });
+    }
 
-    const executeNode = async (agent: IAgent): Promise<void> => {
+    const executeNode = async (agent: IAgent, stepLabel: string, progress: number): Promise<void> => {
+      currentState = {
+        ...currentState,
+        project_metadata: {
+          ...currentState.project_metadata,
+          current_step: stepLabel,
+          progress_percent: progress,
+          status: 'running'
+        }
+      };
+      if (onStateUpdate) {
+        onStateUpdate({ ...currentState });
+      }
+
       try {
         const partialUpdate = await agent.execute(currentState);
         currentState = {
           ...currentState,
           ...partialUpdate,
           logs: partialUpdate.logs || currentState.logs,
-          errors: partialUpdate.errors || currentState.errors
+          errors: partialUpdate.errors || currentState.errors,
+          project_metadata: {
+            ...currentState.project_metadata,
+            ...(partialUpdate.project_metadata || {}),
+            progress_percent: progress,
+            status: 'running'
+          }
         };
         if (onStateUpdate) {
           onStateUpdate({ ...currentState });
@@ -86,11 +116,12 @@ export class LangGraphWorkflow {
     const HARD_TIMEOUT_MS = 120_000;
 
     const pipelinePromise = (async (): Promise<PipelineState> => {
-      // Node 1: ProjectManagerAgent
-      await executeNode(this.pmAgent);
+      // Node 1: ProjectManagerAgent (15%)
+      await executeNode(this.pmAgent, 'Analyzing requirements & architecture', 15);
 
       if (options?.runOnlyProjectManager) {
         currentState.project_metadata.status = 'completed';
+        currentState.project_metadata.progress_percent = 100;
         currentState.project_metadata.current_step = 'ProjectManagerAgent Completed (Milestone 1)';
         if (onStateUpdate) {
           onStateUpdate({ ...currentState });
@@ -98,11 +129,12 @@ export class LangGraphWorkflow {
         return currentState;
       }
 
-      // Node 2: UIAgent
-      await executeNode(this.uiAgent);
+      // Node 2: UIAgent (30%)
+      await executeNode(this.uiAgent, 'Designing UI specifications & color theme', 30);
 
       if (options?.runUpToUIAgent) {
         currentState.project_metadata.status = 'completed';
+        currentState.project_metadata.progress_percent = 100;
         currentState.project_metadata.current_step = 'UIAgent Completed (Milestone 2)';
         if (onStateUpdate) {
           onStateUpdate({ ...currentState });
@@ -110,24 +142,24 @@ export class LangGraphWorkflow {
         return currentState;
       }
 
-      // Node 3: ContentAgent
-      await executeNode(this.contentAgent);
+      // Node 3: ContentAgent (45%)
+      await executeNode(this.contentAgent, 'Crafting copywriting & section headlines', 45);
 
-      // Node 4: SEOAgent
-      await executeNode(this.seoAgent);
+      // Node 4: SEOAgent (60%)
+      await executeNode(this.seoAgent, 'Generating SEO metadata & semantic tags', 60);
 
-      // Node 5: ComponentPlannerAgent
+      // Node 5: ComponentPlannerAgent (75%)
       const plannerStart = Date.now();
-      await executeNode(this.componentPlannerAgent);
+      await executeNode(this.componentPlannerAgent, 'Structuring React component hierarchy', 75);
       const plannerDurationMs = Date.now() - plannerStart;
 
-      // Node 6: DataModelAgent
+      // Node 6: DataModelAgent (85%)
       const dataModelStart = Date.now();
-      await executeNode(this.dataModelAgent);
+      await executeNode(this.dataModelAgent, 'Modeling dynamic schema & interactive state', 85);
       const dataModelDurationMs = Date.now() - dataModelStart;
 
-      // Node 7: IntegratorAgent
-      await executeNode(this.integratorAgent);
+      // Node 7: IntegratorAgent (95% -> 100%)
+      await executeNode(this.integratorAgent, 'Synthesizing code, validating bundle & self-healing', 95);
 
       const totalDurationMs = Date.now() - totalPipelineStartTime;
       currentState.metrics = {
@@ -145,6 +177,16 @@ export class LangGraphWorkflow {
         dataModelDurationMs,
         totalDurationMs
       };
+
+      currentState.project_metadata = {
+        ...currentState.project_metadata,
+        progress_percent: 100,
+        current_step: 'Generation Complete',
+        status: 'completed'
+      };
+      if (onStateUpdate) {
+        onStateUpdate({ ...currentState });
+      }
 
       return currentState;
     })();

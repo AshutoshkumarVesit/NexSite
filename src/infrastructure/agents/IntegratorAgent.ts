@@ -98,6 +98,7 @@ export class IntegratorAgent implements IAgent {
 
           try {
             const promptText = INTEGRATOR_AGENT_PROMPT
+              .replace('{raw_prompt}', state.requirements.raw_prompt || category || 'Custom Web Application')
               .replace('{component_name}', compDef.name)
               .replace('{component_purpose}', compDef.purpose)
               .replace('{component_props}', (compDef.props || []).join(', '))
@@ -394,8 +395,16 @@ export class IntegratorAgent implements IAgent {
 const pageData = ${dataModelJson};
 
 export default function App() {
+  const ds = pageData?.designSystem || {};
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
+    <div 
+      className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-violet-500 selection:text-white"
+      style={{
+        '--primary': ds.primaryColor || '#7c3aed',
+        '--secondary': ds.secondaryColor || '#6366f1',
+        '--accent': ds.accentColor || '#ec4899',
+      } as React.CSSProperties}
+    >
 ${componentTags}
     </div>
   );

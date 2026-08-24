@@ -35,7 +35,7 @@ export class ModelRegistry {
     },
     Groq: {
       provider: 'Groq',
-      defaultModel: 'llama-3.3-70b-versatile',
+      defaultModel: 'openai/gpt-oss-120b',
       envVar: 'GROQ_MODEL',
       baseUrl: 'https://api.groq.com/openai/v1'
     },

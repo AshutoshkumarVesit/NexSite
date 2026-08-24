@@ -110,6 +110,7 @@ export interface ProjectMetadata {
   name: string;
   created_at: string;
   current_step: string;
+  progress_percent?: number;
   status: 'idle' | 'running' | 'completed' | 'error';
 }
 

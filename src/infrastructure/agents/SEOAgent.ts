@@ -19,6 +19,7 @@ export class SEOAgent implements IAgent {
     const siteDescription = state.content?.hero?.subtitle || state.content?.about?.body || '';
 
     const promptText = SEO_AGENT_PROMPT
+      .replace('{raw_prompt}', state.requirements.raw_prompt || category || 'Custom Application')
       .replace('{category}', category || 'LandingPage')
       .replace('{hero_title}', heroTitle)
       .replace('{site_description}', siteDescription)

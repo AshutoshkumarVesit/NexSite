@@ -16,6 +16,22 @@ const providerManager = new ProviderManager();
 app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
+// Simple in-memory users
+const users = [
+  { username: 'admin', password: 'admin123', role: 'admin' },
+  { username: 'user', password: 'user123', role: 'user' },
+];
+
+// Auth login endpoint
+app.post('/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  const found = users.find(u => u.username === username && u.password === password);
+  if (!found) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  const token = Buffer.from(`${found.username}:${found.role}`).toString('base64');
+  res.json({ token, role: found.role });
+});
 
 app.post('/generate', async (req, res) => {
   try {

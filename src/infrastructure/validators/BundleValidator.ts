@@ -65,14 +65,22 @@ export class BundleValidator {
       }
     }
 
-    // Auto-inject missing imports for known components in all files
+    // Auto-inject missing imports for known components in all files & strip self-imports
     for (const [fileName, code] of Object.entries(generatedFiles)) {
       if (!fileName.endsWith('.tsx') && !fileName.endsWith('.ts')) continue;
       let modifiedCode = code;
+      const selfName = fileName.replace(/\.tsx?$/, '');
+
+      // Strip self-imports (e.g. Testimonials.tsx importing Testimonials)
+      const selfImportRegex = new RegExp(`import\\s+.*?from\\s+['"]\\.?\\/?${selfName}['"]\\s*;?`, 'gi');
+      if (selfImportRegex.test(modifiedCode)) {
+        console.log(`[BundleValidator] 🔄 Stripping self-import from ${fileName}`);
+        modifiedCode = modifiedCode.replace(selfImportRegex, '');
+      }
       
       for (const compName of availableCompNames) {
-        // Skip self
-        if (fileName === `${compName}.tsx`) continue;
+        // Skip self (case-insensitive)
+        if (selfName.toLowerCase() === compName.toLowerCase()) continue;
         
         // If the component is used as a tag
         const tagRegex = new RegExp(`<${compName}[\\s/>]`);
