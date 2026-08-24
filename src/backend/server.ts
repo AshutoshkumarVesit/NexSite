@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
 import { ProviderManager } from '../infrastructure/llm/ProviderManager';
 
 dotenv.config();
@@ -16,7 +18,8 @@ const providerManager = new ProviderManager();
 app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
-// Simple in-memory users
+
+// Simple in-memory users for basic auth
 const users = [
   { username: 'admin', password: 'admin123', role: 'admin' },
   { username: 'user', password: 'user123', role: 'user' },
@@ -69,9 +72,18 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
+// Serve frontend build in production if dist exists
+const distPath = path.resolve(process.cwd(), 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 app.listen(port, () => {
-  console.log(`[NexSite LLM Backend] Express server running on http://localhost:${port}`);
-  console.log(`[NexSite LLM Backend] Provider sequence: ${process.env.PROVIDER_SEQUENCE || 'Gemini,Groq,OpenRouter,Together,HuggingFace,Mock'}`);
+  console.log(`[NexSite LLM Backend] Express server running on port ${port}`);
+  console.log(`[NexSite LLM Backend] Provider sequence: ${process.env.PROVIDER_SEQUENCE || 'Groq,Mistral,OpenRouter,Nvidia'}`);
 });
 
 export default app;
