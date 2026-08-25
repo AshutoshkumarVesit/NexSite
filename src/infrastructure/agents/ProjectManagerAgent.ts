@@ -37,14 +37,15 @@ export class ProjectManagerAgent implements IAgent {
       if (!extractedCategory) {
         // Derive category from prompt keywords if LLM omitted it
         const lowerPrompt = rawPrompt.toLowerCase();
-        if (/youtube|video|stream|tube/i.test(lowerPrompt)) extractedCategory = 'Video Streaming';
-        else if (/restaurant|cafe|dining|food|bistro/i.test(lowerPrompt)) extractedCategory = 'Restaurant';
-        else if (/health|clinic|doctor|hospital|medical/i.test(lowerPrompt)) extractedCategory = 'Healthcare';
-        else if (/crypto|web3|blockchain|token|wallet/i.test(lowerPrompt)) extractedCategory = 'Crypto';
-        else if (/portfolio|developer|designer|resume/i.test(lowerPrompt)) extractedCategory = 'Portfolio';
-        else if (/ecommerce|shop|store|product|buy/i.test(lowerPrompt)) extractedCategory = 'E-Commerce';
-        else if (/agency|studio|creative|marketing/i.test(lowerPrompt)) extractedCategory = 'Agency';
-        else if (/fitness|gym|workout|trainer/i.test(lowerPrompt)) extractedCategory = 'Fitness';
+        if (/ecommerce|shop|store|product|buy|sell|watch|timepiece|shoe|sneaker|cloth|jewelry|retail/i.test(lowerPrompt)) extractedCategory = 'E-Commerce';
+        else if (/football|soccer|score|match|league|sports|cricket|nba|nfl|tennis/i.test(lowerPrompt)) extractedCategory = 'Sports';
+        else if (/youtube|twitch|netflix|video\s*stream|broadcasting/i.test(lowerPrompt)) extractedCategory = 'Video Streaming';
+        else if (/restaurant|cafe|dining|food|bistro|bakery|coffee/i.test(lowerPrompt)) extractedCategory = 'Restaurant';
+        else if (/health|clinic|doctor|hospital|medical|dental|pharma/i.test(lowerPrompt)) extractedCategory = 'Healthcare';
+        else if (/crypto|web3|blockchain|token|wallet|defi/i.test(lowerPrompt)) extractedCategory = 'Crypto';
+        else if (/portfolio|developer|designer|resume|freelancer/i.test(lowerPrompt)) extractedCategory = 'Portfolio';
+        else if (/agency|studio|creative|marketing|branding/i.test(lowerPrompt)) extractedCategory = 'Agency';
+        else if (/fitness|gym|workout|trainer|crossfit|yoga/i.test(lowerPrompt)) extractedCategory = 'Fitness';
         else extractedCategory = 'LandingPage';
       }
 

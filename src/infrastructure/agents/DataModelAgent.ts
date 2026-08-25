@@ -36,7 +36,13 @@ export class DataModelAgent implements IAgent {
         
         // Category-tailored hero background
         let heroBg = 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=1920&h=1080&fit=crop&auto=format&q=80';
-        if (rawCategory.includes('restaurant') || rawCategory.includes('food')) {
+        if (rawCategory.includes('watch') || rawCategory.includes('timepiece') || rawCategory.includes('jewelry')) {
+          heroBg = 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1920&h=1080&fit=crop&auto=format&q=80';
+        } else if (rawCategory.includes('sports') || rawCategory.includes('football') || rawCategory.includes('soccer')) {
+          heroBg = 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=1920&h=1080&fit=crop&auto=format&q=80';
+        } else if (rawCategory.includes('ecommerce') || rawCategory.includes('shop') || rawCategory.includes('store')) {
+          heroBg = 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1920&h=1080&fit=crop&auto=format&q=80';
+        } else if (rawCategory.includes('restaurant') || rawCategory.includes('food')) {
           heroBg = 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=1920&h=1080&fit=crop&auto=format&q=80';
         } else if (rawCategory.includes('fitness') || rawCategory.includes('gym')) {
           heroBg = 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=1920&h=1080&fit=crop&auto=format&q=80';

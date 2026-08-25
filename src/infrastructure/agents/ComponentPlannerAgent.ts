@@ -86,19 +86,16 @@ export class ComponentPlannerAgent implements IAgent {
       }
     }
 
-    const hasApp = deduplicated.some((c: ComponentDefinition) => c.name.toLowerCase() === 'app');
-    if (!hasApp) {
-      deduplicated.push({ name: 'App', purpose: 'Root application component' });
-    } else {
-      // Ensure App is named exactly 'App' (uppercase) and placed at the end
-      const appIdx = deduplicated.findIndex(c => c.name.toLowerCase() === 'app');
-      if (appIdx !== -1) {
-        const [appComp] = deduplicated.splice(appIdx, 1);
-        deduplicated.push({ ...appComp, name: 'App' });
-      }
-    }
-
-    return deduplicated;
+    // Separate App from content sections
+    const nonAppComponents = deduplicated.filter((c: ComponentDefinition) => c.name.toLowerCase() !== 'app');
+    
+    // Clamp to at most 6 high-value components so single-call bundle generation succeeds reliably
+    const clampedNonApp = nonAppComponents.length > 6 ? nonAppComponents.slice(0, 6) : nonAppComponents;
+    
+    return [
+      ...clampedNonApp,
+      { name: 'App', purpose: 'Root application component that injects design system and renders all sections in order', props: [] }
+    ];
   }
 
   private createDeterministicFallback(): ComponentDefinition[] {

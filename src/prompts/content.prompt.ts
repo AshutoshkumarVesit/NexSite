@@ -13,10 +13,11 @@ PROJECT REQUIREMENTS:
 
 CRITICAL COPYWRITING INSTRUCTIONS:
 1. Write copy that is 100% SPECIFIC to the user request "{raw_prompt}".
-   - For a YouTube / video platform: Write video-focused headlines (e.g. "Stream, Share, and Discover What Inspires You"), channel descriptions, trending video teasers, creator calls-to-action (e.g. "Start Streaming", "Explore Channels").
-   - For an E-Commerce store: Write product-specific titles, pricing benefits, customer reviews.
+   - For a Watch Selling / E-Commerce site: Write luxury timepiece headlines (e.g. "Precision Craftsmanship. Timeless Elegance.", "Swiss Automatic Movements & Masterful Horology"), product benefit descriptions, warranty & authenticity points, customer reviews.
+   - For a Sports / Football score site: Write matchday headlines (e.g. "Live Scores, In-Depth Stats & Real-Time Match Alerts", "Never Miss a Goal Across Premier League, Champions League & La Liga"), standings info, breaking match reports.
    - For a Fitness site: Write workout, training, membership copy.
-   - NEVER generate generic filler text like "Welcome to general website" or "general website has to offer".
+   - For a Video / Streaming site: Write video streaming headlines (e.g. "Stream, Share, and Discover What Inspires You").
+   - NEVER generate generic filler text like "Welcome to general website" or "Explore all features and details".
 2. Return ONLY a valid JSON object matching the exact schema below.
 3. Do NOT wrap in markdown code fences or add conversational text.
 
@@ -25,7 +26,7 @@ EXPECTED JSON SCHEMA:
   "hero": {
     "title": "Compelling, punchy headline specifically about the user's project",
     "subtitle": "Clear, engaging subtitle describing what makes this platform or business exceptional",
-    "cta": "Action-oriented button text (e.g. 'Explore Videos', 'Start Free Trial', 'Book Appointment')"
+    "cta": "Action-oriented button text (e.g. 'Explore Collection', 'View Live Matches', 'Start Free Trial')"
   },
   "about": {
     "title": "Section Title",
@@ -48,7 +49,7 @@ EXPECTED JSON SCHEMA:
   "testimonials": [
     {
       "name": "Realistic Person Name",
-      "role": "Relevant Title (e.g. Content Creator, Verified Buyer, Senior Member)",
+      "role": "Relevant Title (e.g. Watch Collector, Club Member, Senior Analyst)",
       "quote": "Authentic testimonial describing their great experience"
     }
   ],

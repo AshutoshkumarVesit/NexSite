@@ -1028,31 +1028,16 @@ function buildSuccessSrcdoc(
 
             if (cache[prop]) return cache[prop];
 
-            if (prop === 'title') return 'Overview';
-            if (prop === 'name') return 'Featured';
-            if (prop === 'subtitle' || prop === 'description') return 'Explore all features and details.';
-            if (prop === 'quote' || prop === 'content' || prop === 'feedback' || prop === 'comment' || prop === 'review') return 'An outstanding experience with exceptional quality and results.';
-            if (prop === 'author') return 'Alex Morgan';
-            if (prop === 'role' || prop === 'designation') return 'Product Lead';
-            if (prop === 'company') return 'NexStudio';
-            if (prop === 'badge' || prop === 'tag' || prop === 'status' || prop === 'category') return 'Featured';
-            if (prop === 'rating' || prop === 'stars') return 5;
-            if (prop === 'price') return '$49';
-            if (prop === 'period') return '/month';
-            if (prop === 'question') return 'How does it work?';
-            if (prop === 'answer') return 'Everything is automated, interactive, and fully responsive.';
-            if (prop === 'date') return 'August 2026';
-            if (prop === 'text' || prop === 'label' || prop === 'caption' || prop === 'heading') return 'Explore';
-            if (prop === 'href' || prop === 'url' || prop === 'link') return '#';
-            if (prop === 'image' || prop === 'imageUrl' || prop === 'src' || prop === 'avatar' || prop === 'photo') {
-              return 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800';
-            }
-            if (prop === 'cta' || prop === 'button' || prop === 'action') {
-              return createSafeDataProxy({ text: 'Get Started', href: '#', label: 'Get Started', title: 'Get Started' });
-            }
-            if (prop === 'items' || prop === 'links' || prop === 'features' || prop === 'cards' || prop === 'stats' || prop === 'testimonials' || prop === 'plans' || prop === 'faq' || prop === 'posts' || prop === 'members' || prop === 'steps' || prop === 'services' || prop === 'highlights' || prop === 'quotes' || prop === 'reviews' || prop === 'options' || prop === 'tags') {
+            // List arrays return safe empty array to prevent .map() crashes
+            if (prop === 'items' || prop === 'links' || prop === 'features' || prop === 'cards' || prop === 'stats' || prop === 'testimonials' || prop === 'plans' || prop === 'faq' || prop === 'posts' || prop === 'members' || prop === 'steps' || prop === 'services' || prop === 'highlights' || prop === 'quotes' || prop === 'reviews' || prop === 'options' || prop === 'tags' || prop === 'products' || prop === 'scores' || prop === 'matches') {
               return [];
             }
+
+            // CTAs and interactive object blocks return safe proxy objects
+            if (prop === 'cta' || prop === 'button' || prop === 'action' || prop === 'primaryCta' || prop === 'secondaryCta') {
+              return createSafeDataProxy({ text: 'Get Started', href: '#', label: 'Get Started', title: 'Get Started' });
+            }
+
             if (prop === 'designSystem') {
               return createSafeDataProxy({
                 primaryColor: '#7c3aed',
@@ -1062,9 +1047,15 @@ function buildSuccessSrcdoc(
               });
             }
 
-            var nested = createSafeDataProxy({});
-            cache[prop] = nested;
-            return nested;
+            // Nested objects (user, author, profile, theme) return a safe nested proxy
+            if (prop === 'user' || prop === 'author' || prop === 'theme' || prop === 'profile' || prop === 'meta' || prop === 'settings' || prop === 'config') {
+              var nestedObj = createSafeDataProxy({});
+              cache[prop] = nestedObj;
+              return nestedObj;
+            }
+
+            // For primitive leaf properties (title, subtitle, description, etc.), return undefined so component defaults (e.g. title = 'Features') work!
+            return undefined;
           }
         });
       }
@@ -1079,21 +1070,19 @@ function buildSuccessSrcdoc(
           var incomingData = rawProps.data !== undefined ? rawProps.data : (rawProps.content !== undefined ? rawProps.content : {});
           var safeData = createSafeDataProxy(incomingData);
           var safeProps = Object.assign({}, rawProps, {
-            data: safeData,
-            title: rawProps.title || safeData.title,
-            subtitle: rawProps.subtitle || safeData.subtitle,
-            description: rawProps.description || safeData.description,
+            data: safeData
           });
 
           try {
             return originalFn(safeProps);
           } catch(renderErr) {
             console.warn('[SafeComponent fallback for <' + compName + '/>]:', renderErr);
+            var compTitle = (safeData && safeData.title) || compName;
             return React.createElement('div', {
               className: 'w-full py-12 px-6 my-4 text-center rounded-2xl bg-slate-900/60 border border-slate-800 text-slate-300 backdrop-blur-sm'
             },
               React.createElement('div', { className: 'inline-flex items-center justify-center w-12 h-12 rounded-xl bg-violet-600/20 text-violet-400 mb-3' }, '✨'),
-              React.createElement('h3', { className: 'text-xl font-bold text-white mb-1' }, (safeData && safeData.title) || compName),
+              React.createElement('h3', { className: 'text-xl font-bold text-white mb-1' }, compTitle),
               React.createElement('p', { className: 'text-sm text-slate-400 max-w-md mx-auto' }, (safeData && (safeData.subtitle || safeData.description)) || 'Section dynamically rendered.')
             );
           }
