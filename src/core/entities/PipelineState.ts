@@ -177,7 +177,9 @@ export interface PipelineState {
   generated_files: Record<string, string>; // path -> content
   metrics?: PipelineMetrics;
   renderer_diagnostics?: RendererDiagnostics;
+  generation_budget?: import('../../infrastructure/llm/GenerationBudget').GenerationBudget;
   project_metadata: ProjectMetadata;
   logs: PipelineLog[];
   errors: PipelineError[];
 }
+

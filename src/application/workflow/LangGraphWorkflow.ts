@@ -7,6 +7,7 @@ import { SEOAgent } from '../../infrastructure/agents/SEOAgent';
 import { ComponentPlannerAgent } from '../../infrastructure/agents/ComponentPlannerAgent';
 import { DataModelAgent } from '../../infrastructure/agents/DataModelAgent';
 import { IntegratorAgent } from '../../infrastructure/agents/IntegratorAgent';
+import { GenerationBudget } from '../../infrastructure/llm/GenerationBudget';
 import type { ILLMProvider } from '../../core/interfaces/ILLMProvider';
 
 export type StateUpdateCallback = (state: PipelineState) => void;
@@ -44,8 +45,12 @@ export class LangGraphWorkflow {
     onStateUpdate?: StateUpdateCallback,
     options?: WorkflowOptions
   ): Promise<PipelineState> {
+    // Initialize generation budget (max 10 LLM calls, max 1 repair)
+    const budget = new GenerationBudget(10, 1);
+
     let currentState: PipelineState = { 
       ...initialState,
+      generation_budget: budget,
       project_metadata: {
         ...initialState.project_metadata,
         progress_percent: 5,
@@ -58,6 +63,7 @@ export class LangGraphWorkflow {
     }
 
     const executeNode = async (agent: IAgent, stepLabel: string, progress: number): Promise<void> => {
+      const stepStart = Date.now();
       currentState = {
         ...currentState,
         project_metadata: {
@@ -76,6 +82,7 @@ export class LangGraphWorkflow {
         currentState = {
           ...currentState,
           ...partialUpdate,
+          generation_budget: budget, // preserve budget reference
           logs: partialUpdate.logs || currentState.logs,
           errors: partialUpdate.errors || currentState.errors,
           project_metadata: {
@@ -110,6 +117,7 @@ export class LangGraphWorkflow {
         }
         throw err;
       }
+      budget.recordStep(agent.name, Date.now() - stepStart);
     };
 
     const totalPipelineStartTime = Date.now();
@@ -142,24 +150,51 @@ export class LangGraphWorkflow {
         return currentState;
       }
 
-      // Node 3: ContentAgent (45%)
-      await executeNode(this.contentAgent, 'Crafting copywriting & section headlines', 45);
+      // Nodes 3+4: ContentAgent + SEOAgent (PARALLEL — they don't depend on each other)
+      currentState = {
+        ...currentState,
+        project_metadata: {
+          ...currentState.project_metadata,
+          current_step: 'Crafting content & SEO (parallel)',
+          progress_percent: 45,
+          status: 'running'
+        }
+      };
+      if (onStateUpdate) onStateUpdate({ ...currentState });
 
-      // Node 4: SEOAgent (60%)
-      await executeNode(this.seoAgent, 'Generating SEO metadata & semantic tags', 60);
+      const parallelStart = Date.now();
+      const [contentResult, seoResult] = await Promise.allSettled([
+        this.contentAgent.execute(currentState),
+        this.seoAgent.execute(currentState)
+      ]);
 
-      // Node 5: ComponentPlannerAgent (75%)
-      const plannerStart = Date.now();
-      await executeNode(this.componentPlannerAgent, 'Structuring React component hierarchy', 75);
-      const plannerDurationMs = Date.now() - plannerStart;
+      // Merge content result
+      if (contentResult.status === 'fulfilled') {
+        currentState = { ...currentState, ...contentResult.value, generation_budget: budget, logs: contentResult.value.logs || currentState.logs, errors: contentResult.value.errors || currentState.errors };
+      } else {
+        currentState.logs.push({ timestamp: new Date().toISOString(), agentName: 'ContentAgent', message: `Failed: ${contentResult.reason}`, level: 'error' });
+      }
+      budget.recordStep('ContentAgent', Date.now() - parallelStart);
 
-      // Node 6: DataModelAgent (85%)
-      const dataModelStart = Date.now();
-      await executeNode(this.dataModelAgent, 'Modeling dynamic schema & interactive state', 85);
-      const dataModelDurationMs = Date.now() - dataModelStart;
+      // Merge SEO result
+      if (seoResult.status === 'fulfilled') {
+        currentState = { ...currentState, ...seoResult.value, generation_budget: budget, logs: seoResult.value.logs || currentState.logs, errors: seoResult.value.errors || currentState.errors };
+      } else {
+        currentState.logs.push({ timestamp: new Date().toISOString(), agentName: 'SEOAgent', message: `Failed: ${seoResult.reason}`, level: 'error' });
+      }
+      budget.recordStep('SEOAgent', Date.now() - parallelStart);
 
-      // Node 7: IntegratorAgent (95% -> 100%)
-      await executeNode(this.integratorAgent, 'Synthesizing code, validating bundle & self-healing', 95);
+      currentState.project_metadata.progress_percent = 55;
+      if (onStateUpdate) onStateUpdate({ ...currentState });
+
+      // Node 5: ComponentPlannerAgent (70%)
+      await executeNode(this.componentPlannerAgent, 'Structuring React component hierarchy', 70);
+
+      // Node 6: DataModelAgent (80%)
+      await executeNode(this.dataModelAgent, 'Modeling dynamic schema & interactive state', 80);
+
+      // Node 7: IntegratorAgent (90% -> 100%) — SINGLE LLM call for all components
+      await executeNode(this.integratorAgent, 'Generating complete website bundle', 95);
 
       const totalDurationMs = Date.now() - totalPipelineStartTime;
       currentState.metrics = {
@@ -173,8 +208,6 @@ export class LangGraphWorkflow {
           validationErrors: 0,
           repairDurationMs: 0
         }),
-        plannerDurationMs,
-        dataModelDurationMs,
         totalDurationMs
       };
 
@@ -187,6 +220,9 @@ export class LangGraphWorkflow {
       if (onStateUpdate) {
         onStateUpdate({ ...currentState });
       }
+
+      // Print budget summary
+      budget.printSummary();
 
       return currentState;
     })();

@@ -25,7 +25,7 @@ export class ComponentPlannerAgent implements IAgent {
 
     let components: ComponentDefinition[] = [];
     let usedFallback = false;
-    let retryAttempted = false;
+
     const timestamp = new Date().toISOString();
 
     try {
@@ -36,24 +36,14 @@ export class ComponentPlannerAgent implements IAgent {
       const unwrapped = (raw?.component_plan || raw?.components ? raw : (raw?.data || raw)) as any;
       components = this.validateAndNormalize(unwrapped);
     } catch (err) {
-      retryAttempted = true;
-      try {
-        const retryPrompt = `${promptText}\n\nATTENTION: Previous response failed JSON validation. Return 100% valid JSON matching the schema containing a "components" array.`;
-        const retryRaw = await this.llmProvider.generateJSON<any>(
-          retryPrompt,
-          'Component Plan JSON (Retry)'
-        );
-        const unwrappedRetry = (retryRaw?.component_plan || retryRaw?.components ? retryRaw : (retryRaw?.data || retryRaw)) as any;
-        components = this.validateAndNormalize(unwrappedRetry);
-      } catch (err2) {
-        usedFallback = true;
-        components = this.createDeterministicFallback();
-      }
+      // Immediate deterministic fallback — no retry LLM call to save budget
+      usedFallback = true;
+      components = this.createDeterministicFallback();
     }
 
     const logMessage = usedFallback
       ? 'Generated component plan using deterministic fallback after LLM failure/retry.'
-      : `Planned ${components.length} components successfully${retryAttempted ? ' on retry' : ''}.`;
+      : `Planned ${components.length} components successfully.`;
 
     return {
       component_plan: { components },

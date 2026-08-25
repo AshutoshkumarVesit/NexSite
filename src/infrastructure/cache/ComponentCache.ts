@@ -5,6 +5,7 @@ export class ComponentCache {
 
   public static generateKey(state: PipelineState, compDef: ComponentDefinition): string {
     const dataToHash = {
+      rawPrompt: (state.requirements.raw_prompt || '').trim().toLowerCase().slice(0, 100),
       category: state.requirements.category,
       tone: state.requirements.tone,
       features: state.requirements.key_features,
